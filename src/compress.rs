@@ -4,6 +4,8 @@ use bitcoin::blockdata::script::Script;
 use bitcoin::psbt::serialize::Deserialize;
 use bitcoin::Txid;
 
+use secp256k1;
+
 use bitcoin::hashes::hex::FromHex;
 
 use bitcoincore_rpc::RpcApi;
@@ -232,7 +234,7 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		let vout = tx[index] as u32;
 		index += 1;
 
-		let script = match input_type {
+		let (script, witness) = match input_type {
 			"01" => {
 				let script_sig = &tx[index..index+71];
 				index += 71;
@@ -250,8 +252,38 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 						return Err(e.to_string());
 					}
 				};
-				script
+				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+				let witness = Witness::from_vec(witness_vec_vec.clone());
+				(script, witness)
 			},
+			"10" => {
+				let script = match Script::from_hex("00") {
+					Ok(ss) => ss,
+					Err(e) => {
+						println!("error = {}", e);
+						return Err(e.to_string());
+					}
+				};
+				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+				let witness = Witness::from_vec(witness_vec_vec.clone());
+				(script, witness)
+			},
+			"11" => {
+				let script = match Script::from_hex("00") {
+					Ok(ss) => ss,
+					Err(e) => {
+						println!("error = {}", e);
+						return Err(e.to_string());
+					}
+				};
+				let witness_vec = &tx[index..index+65];
+				index += 65;
+				let mut witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+				witness_vec_vec.push(witness_vec.to_vec());
+				let witness = Witness::from_vec(witness_vec_vec.clone());
+				println!("wit = {}", hex::encode(witness.to_vec()[0].clone()));
+				(script, witness)
+			}
 			_  => {
 				let script_length = tx[index] as usize;
 				index += 1;
@@ -264,7 +296,9 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 					}
 				};
 				index += script_length;
-				script
+				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+				let witness = Witness::from_vec(witness_vec_vec.clone());
+				(script, witness)
 			}
 			
 		};
@@ -280,8 +314,8 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		};
 		
 
-		let witness_count = tx[index];
-		index += 1;
+		//let witness_count = tx[index];
+		//index += 1;
 
 		//let block_hash = match rpc.get_block_hash(block_height as u64) {
 		//	Ok(hash) => hash,
@@ -305,21 +339,19 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		println!("Vout = {}", vout);
 		println!("Script = {}", script);
 		println!("Sequence = {}", sequence);
-		println!("Witness Count = {}", witness_count);
 
-		let mut witness_vec: Vec<Vec<u8>> = Vec::new();
-		for _ in 0..witness_count {
-
-			let witness_length = tx[index] as usize;
-			println!("Witness Length = {}", witness_length);
-			index += 1;
-
-			println!("Witness = {}", hex::encode(&tx[index..index+witness_length]));
-			witness_vec.push(tx[index..index+witness_length].to_vec());
-			index += witness_length;
-
-		}
-		let witness = Witness::from_vec(witness_vec.clone());
+		
+		//for _ in 0..witness_count {
+//
+//			let witness_length = tx[index] as usize;
+//			println!("Witness Length = {}", witness_length);
+//			index += 1;
+//
+//			println!("Witness = {}", hex::encode(&tx[index..index+witness_length]));
+//			witness_vec.push(tx[index..index+witness_length].to_vec());
+//			index += witness_length;
+//
+//		}
 
 		let outpoint = OutPoint::new(txid, vout);
 		let txin = TxIn {
@@ -806,7 +838,16 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 			},
 			"10" => {
 				println!("No Script");
-				compressed_transaction.push(transaction.input[i].witness.to_vec()[x].len() as u8);
+				let signature = secp256k1::ecdsa::Signature::from_der(&transaction.input[i].witness.to_vec()[0]);
+
+
+				//println!("sig = {}", signature);
+				//compressed_transaction.push(transaction.input[i].witness.to_vec()[x].len() as u8);
+			},
+			"11" => {
+				println!("post TR");
+				println!("wit = {}", hex::encode(transaction.input[i].witness.to_vec()[0].clone()));
+				compressed_transaction.extend(transaction.input[i].witness.to_vec()[0].clone());
 			}
 			_ => {
 				compressed_transaction.push(transaction.input[i].script_sig.len() as u8);
