@@ -73,7 +73,6 @@ impl Sandbox for App {
                 }
             }
             Message::DecrementPressed => {
-                println!("Stegoing");
                 let newfile = stego(self.file.clone(), self.text.clone());
                 println!("{}", newfile);
             }
@@ -88,13 +87,33 @@ impl Sandbox for App {
                 let rpc = Client::new(&("http://localhost:".to_owned()+&self.rpcport),
                               Auth::UserPass(self.rpcuser.clone(),
                                              self.rpcpass.clone())).unwrap();
-                match compress_transaction(self.text.clone(), rpc) {
-                    Ok(compressed_transaction) => self.text = compressed_transaction,
-                    Err(error) => self.error = error,
-                };
-                if self.error == "" {
-                    //self.step += 1;
+               
+                let bc = rpc.get_block_count().expect("Could Not Get Block Count");
+                for i in 700000..bc {
+                    println!("B-----------------------------------------------------I = {}", i);
+                    let bh = rpc.get_block_hash(i).expect("Could Not Get Block Hash");
+                    let txs = rpc.get_block_info(&bh).expect("Could Not Get Block Info").tx;
+                    for x in 0..txs.len() {
+                        println!("T-----------------------------------------------------X = {}", x);
+                        let tx = txs[x];
+                        println!("tx = {}", tx);
+                        let transaction = rpc.get_raw_transaction_hex(&tx, Some(&bh)).expect("Could Not Find Transaction");
+                        let ctx = match compress_transaction(&transaction, &rpc) {
+                            Ok(ctx) => ctx,
+                            Err(err) => {
+                                println!("err: {}", err);
+                                self.error = err.to_string();
+                                break
+                            }
+                        };
+                        println!("tranlen = {}, ctxlen = {}, diff = {}", transaction.len(), ctx.len(), transaction.len()-ctx.len());
+                    }
+                    println!("bc = {}", i);
                 }
+                //if self.error == "" {
+                    //self.step += 1;
+                //}
+                //let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
             }
             Message::ClearPressed => {
                 self.error = "".to_string();
@@ -118,7 +137,9 @@ impl Sandbox for App {
         //self.text = "01000000000101d1f1c1f8cdf6759167b90f52c9ad358a369f95284e841d7a2536cef31c0549580100000000fdffffff020000000000000000316a2f49206c696b65205363686e6f7272207369677320616e6420492063616e6e6f74206c69652e204062697462756734329e06010000000000225120a37c3903c8d0db6512e2b40b0dffa05e5a3ab73603ce8c9c4b7771e5412328f90140a60c383f71bac0ec919b1d7dbc3eb72dd56e7aa99583615564f9f99b8ae4e837b758773a5b2e4c51348854c8389f008e05029db7f464a5ff2e01d5e6e626174affd30a00".to_string();
         //self.text = "0100000000010100010000000000000000000000000000000000000000000000000000000000000000000000ffffffff01e8030000000000001976a9144c9c3dfac4207d5d8cb89df5722cb3d712385e3f88ac02483045022100aa5d8aa40a90f23ce2c3d11bc845ca4a12acd99cbea37de6b9f6d86edebba8cb022022dedc2aa0a255f74d04c0b76ece2d7c691f9dd11a64a8ac49f62a99c3a05f9d01232103596d3451025c19dbbdeb932d6bf8bfb4ad499b95b6f88db8899efac102e5fc71ac00000000".to_string();
         //TR
-        self.text = "020000000001041ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890000000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890100000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890200000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890300000000ffffffff01007ea60000000000225120a457d0c0399b499ed2df571d612ba549ae7f199387edceac175999210f6aa39d0141b23008b3e044d16078fc93ae4f342b6e5ba44241c598503f80269fd66e7ce484e926b2ff58ac5633be79857951b3dc778082fd38a9e06a1139e6eea41a8680c7010141be98ba2a47fce6fbe4f7456e5fe0c2381f38ed3ae3b89d0748fdbfc6936b68019e01ff60343abbea025138e58aed2544dc8d3c0b2ccb35e2073fa2f9feeff5ed010141466d525b97733d4733220694bf747fd6e9d4b0b96ea3b2fb06b7486b4b8e864df0057481a01cf10f7ea06849fb4717d62b902fe5807a1cba03a46bf3a7087e940101418dbfbdd2c164005eceb0de04c317b9cae62b0c97ed33da9dcec6301fa0517939b9024eba99e22098a5b0d86eb7218957883ea9fc13b737e1146ae2b95185fcf90100000000".to_string();
+        //self.text = "020000000001041ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890000000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890100000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890200000000ffffffff1ee2529c53a3c05c1e35fa853b9209cbc1a17be31aae9f4e7ea42d13f24c65890300000000ffffffff01007ea60000000000225120a457d0c0399b499ed2df571d612ba549ae7f199387edceac175999210f6aa39d0141b23008b3e044d16078fc93ae4f342b6e5ba44241c598503f80269fd66e7ce484e926b2ff58ac5633be79857951b3dc778082fd38a9e06a1139e6eea41a8680c7010141be98ba2a47fce6fbe4f7456e5fe0c2381f38ed3ae3b89d0748fdbfc6936b68019e01ff60343abbea025138e58aed2544dc8d3c0b2ccb35e2073fa2f9feeff5ed010141466d525b97733d4733220694bf747fd6e9d4b0b96ea3b2fb06b7486b4b8e864df0057481a01cf10f7ea06849fb4717d62b902fe5807a1cba03a46bf3a7087e940101418dbfbdd2c164005eceb0de04c317b9cae62b0c97ed33da9dcec6301fa0517939b9024eba99e22098a5b0d86eb7218957883ea9fc13b737e1146ae2b95185fcf90100000000".to_string();
+        //current
+        self.text = "02000000000101be51e746a94e0df13eb921ef4586c017178bb685493d0c05981c0410806b86650100000000ffffffff01a08601000000000016001445695bdb70712a5b281d7ea7c92b5d3b0be087860247304402206a3550f499b11aa6e6cd9e7140db5f3613989a984b7b9245e9915e4c8f623ccb02206bbc95f8a519ec0b12ff6939ec4187114c9bcf67dd4ce7ad42b85607360b6c82012103e6b77cf7c6efcbd6ba4f77888bbd0917226e861d5db66bd91b8b7e60cbbcb86400000000".to_string();
         let dot_bitcoin = "/home/a/.bitcoin".to_string();
         let mut content = Column::new()
         .spacing(20)

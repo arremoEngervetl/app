@@ -4,8 +4,9 @@ use bitcoin::blockdata::script::Script;
 use bitcoin::psbt::serialize::Deserialize;
 use bitcoin::Txid;
 
-use secp256k1;
-
+use bitcoin::network::constants::Network;
+use bitcoin::blockdata::script::Instruction;
+use secp256k1::Secp256k1;
 use bitcoin::hashes::hex::FromHex;
 
 use bitcoincore_rpc::RpcApi;
@@ -73,7 +74,6 @@ fn to_varint(value: i64) -> Vec<u8> {
 		value_str += &binary
 	};
 
-	println!("Value Str = {}", value_str);
 	let mut result = Vec::new();
 	for x in 0..varlen {
 		let byte = u8::from_str_radix(&value_str[(x*8)..((x+1)*8)], 2).unwrap();
@@ -95,60 +95,53 @@ fn from_varint(tx: &Vec<u8>, oldindex: usize) -> (u64, usize) {
 			}
 		}
 
-		println!("Amount Str = {}", amount_str);
 		return (u64::from_str_radix(&amount_str, 2).unwrap(), index);
 }
 
-
-
-fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction, txid_vec: Vec<Txid>) -> Result<String, String> {
-	println!("----------------------------------");
+fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transaction, txid_vec: Vec<Txid>) -> Result<String, String> {
+	println!("D----------------------------------");
 	let tx: Vec<u8> = hex::decode(tx_hex).expect("uneaven hex");
 	let mut index = 0;
 
+	//Grab Controll bit (vvl)
 	let control = to_bits(tx[index]);
-	println!("{}", control);
+	println!("Control = {}", control);
 	index += 1;
 
+	//Parse Version
 	let version: i32 = match &control[0..2] {
 		"01" => 1,
 		"10" => 2,
 		"11" => 3,
 		"00" => {
+			let vers = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length")) as i32
+			println!("Version = {}", hex::encode(&tx[index..index+4]));
 			index += 4;
-			u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length")) as i32
 		},
 		_ => return Err("Invalid Version Compression Bit".to_string())
 	};
-	println!("Version = {}", version);
 
+	//Parse Lock Time
 	let mut lock_time: u32 = 0;
-	if &control[2..4] == "10" {
-		let block_height = match rpc.get_block_count() {
-			Ok(bh) => bh,
-			Err(e) => {
-				println!("error: {}", e);
-				return Err(e.to_string());
-			}
-		};
-		let first_lock: u32 = ((block_height as u32) / u32::pow(2,16)) * u32::pow(2,16);
-		//TODO: Run throught 100 up and down from current bh
-		let second_lock = u16::from_be_bytes(tx[index..index+2].try_into().expect("slice with incorrect length"));
-		index += 2;
-		lock_time = first_lock + second_lock as u32;
-		println!("Locktime S = {}", lock_time);
-	} else if &control[2..4] == "00" {
-		lock_time = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length"));
-		println!("Locktime B = {}", lock_time);
-		index += 4;
-	} else if &control[2..4] == "01" {
-		println!("Locktime 0 = {}", lock_time);
-	} else {
-		return Err("Invalid Locktime Compression Bit".to_string())
+	match &control[2..3] {
+		"1" => {
+			//If lock time was not zero grab the next 4 bytes
+			let second_lock = u16::from_be_bytes(tx[index..index+2].try_into().expect("slice with incorrect length"));
+			println!("Lock Time 1 = {}", hex::encode(&tx[index..index+2]));
+			index += 1;
+			lock_time = second_lock as u32;
+		},
+		"0" => {
+		},
+		_ => return Err("Invalid Locktime Compression Bit".to_string())
 	}
 
+	//Grab Input Byte
 	let input = to_bits(tx[index]);
+	println!("Input = {}", input);
 	index += 1;
+
+	//Parse input count
 	let input_count: usize = match &input[0..2] {
 		"00" => {
 			let (i, smindex) = from_varint(&tx, index);
@@ -160,13 +153,11 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		"11" => 3,
 		_ => return Err("Invalid Input Compression Bit".to_string())
 	};
-	println!("Input Str = {}", input);
-	println!("Input Count = {}", input_count);
 
+	//Parse Signature
 	let mut global_sequence: u32 = 0;
 	let mut sequence_vec = Vec::new();
 	let mut global_sequence_var = true;
-	println!("Sequence Str = {}", &input[2..6]);
 	if &input[2..4] == "11" {
 		global_sequence = match &input[4..6] {
 			"01" => 0xFFFFFFFF,
@@ -189,18 +180,25 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		}
 	} else if &input[2..6] == "0100" {
 		global_sequence = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length"));
+		println!("0100 Sequence = {}", hex::encode(&tx[index..index+4]));
 		index += 4;
 	} else {
 		global_sequence_var = false;
 	}
 
-	let input_type = &input[6..8];
+	//Parse Input Type
+	let input_type = &input[6..7];
+	let mut input_type_identical = true;
+	if &input[7..8] == "0" {
+		input_type_identical = false;
+	}
 
-
-
-	
+	//Get Output Byte
 	let output = to_bits(tx[index]);
+	println!("Output = {}", output);
 	index += 1;
+
+	//Parse Output Count
 	let output_count: usize = match &output[0..2] {
 		"00" => {
 			let (i, smindex) = from_varint(&tx, index);
@@ -212,111 +210,106 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		"11" => 3,
 		_ => return Err("Invalid Output Compression Bit".to_string())
 	};
-	println!("Output Str = {}", output);
+
+	//Parse Output Type
 	let output_type = &output[2..5];
 	let mut output_type_identical = true;
 	if output_type == "000" {
 		output_type_identical = false;
 	}
-	println!("Output Count = {}", output_count);
 
 	let mut tx_ins = Vec::new();
+	let mut recoverable_signatures = Vec::new();
 	for i in 0..input_count {
 
 		let block_height = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length"));
-		println!("Input Height = {}", hex::encode(&tx[index..index+4]));
+		println!("Block Height = {}", hex::encode(&tx[index..index+4]));
 		index += 4;
 
 		let block_index = u16::from_be_bytes(tx[index..index+2].try_into().expect("slice with incorrect length")) as usize;
-		println!("Input Index = {}", hex::encode(&tx[index..index+2]));
+		println!("Block Index = {}", hex::encode(&tx[index..index+2]));
 		index += 2;
 
-		let vout = tx[index] as u32;
-		index += 1;
+		//Get vout
+		let (vout, smindex) = from_varint(&tx, index);
+		println!("Vout = {}", vout);
+		index += smindex;
 
-		let (script, witness) = match input_type {
-			"01" => {
-				let script_sig = &tx[index..index+71];
-				index += 71;
-				let pubkey = &tx[index..index+65];
-				index += 65;
-				let mut script_vec = Vec::new();
-				script_vec.push(71);
-				script_vec.extend(script_sig);
-				script_vec.push(65);
-				script_vec.extend(pubkey);
-				let script = match Script::from_hex(&hex::encode(&script_vec)) {
-					Ok(ss) => ss,
-					Err(e) => {
-						println!("error = {}", e);
-						return Err(e.to_string());
-					}
-				};
+		//Input Type
+		let mut input_type_str = input_type;
+		let input_type_byte = to_bits(tx[index]).to_string();
+		if !input_type_identical {
+			input_type_str = &input_type_byte[5..8];
+			index += 1;
+		}
+
+		let mut recoverable_sigs = Vec::new();
+		//Get Script and Witness
+		let (script, witness) = match input_type_str {
+			"1" => {
+				//"1" input type is a compressed compact signature
+				let script = Script::new();
+				let bytes = &tx[index..index+64];
+				println!("Script = {}", hex::encode(&tx[index..index+64]));
+				index += 64;
+				let recoverable_signature_0 = secp256k1::ecdsa::RecoverableSignature::from_compact(&bytes, secp256k1::ecdsa::RecoveryId::from_i32(0).expect("Could not create RecoveryId")).expect("Could Not Recover Signature");
+				let recoverable_signature_1 = secp256k1::ecdsa::RecoverableSignature::from_compact(&bytes, secp256k1::ecdsa::RecoveryId::from_i32(1).expect("Could not create RecoveryId")).expect("Could Not Recover Signature");
+				recoverable_sigs.push(recoverable_signature_0);
+				recoverable_sigs.push(recoverable_signature_1);
 				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
 				let witness = Witness::from_vec(witness_vec_vec.clone());
 				(script, witness)
 			},
-			"10" => {
-				let script = match Script::from_hex("00") {
-					Ok(ss) => ss,
-					Err(e) => {
-						println!("error = {}", e);
-						return Err(e.to_string());
-					}
-				};
-				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
-				let witness = Witness::from_vec(witness_vec_vec.clone());
-				(script, witness)
-			},
-			"11" => {
-				let script = match Script::from_hex("00") {
-					Ok(ss) => ss,
-					Err(e) => {
-						println!("error = {}", e);
-						return Err(e.to_string());
-					}
-				};
-				let witness_vec = &tx[index..index+65];
-				index += 65;
-				let mut witness_vec_vec: Vec<Vec<u8>> = Vec::new();
-				witness_vec_vec.push(witness_vec.to_vec());
-				let witness = Witness::from_vec(witness_vec_vec.clone());
-				println!("wit = {}", hex::encode(witness.to_vec()[0].clone()));
-				(script, witness)
-			}
 			_  => {
+				//"0" input type is custom script/witness
 				let script_length = tx[index] as usize;
+				println!("Script Length = {}", script_length);
 				index += 1;
-				println!("Script length = {}", script_length);
+
 				let script = match Script::from_hex(&hex::encode(&tx[index..index+script_length])) {
 					Ok(ss) => ss,
-					Err(e) => {
-						println!("error = {}", e);
-						return Err(e.to_string());
-					}
+					Err(e) => return Err(e.to_string())
 				};
+				println!("Script = {}", hex::encode(&tx[index..index+script_length]));
 				index += script_length;
-				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+
+				let witness_count = tx[index] as usize;
+				println!("Witnesses Length = {}", witness_count);
+				index += 1;
+
+				let mut witness_vec_vec: Vec<Vec<u8>> = Vec::new();
+				for x in 0..witness_count {
+					let witness_len = tx[index] as usize;
+					println!("Witness Length = {}", witness_len);
+					index += 1;
+
+					let witness = &tx[index..index+witness_len];
+					println!("Witness = {}", hex::encode(&tx[index..index+witness_len]));
+					index += witness_len;
+
+					witness_vec_vec.push(witness.to_vec());
+				}
+				
 				let witness = Witness::from_vec(witness_vec_vec.clone());
 				(script, witness)
 			}
 			
 		};
 
+		//sequence was parsed above but might be of custom type
+		//true no sequ vec = all sequences are the same displayed as 2 bits of the sequence byte or as 4 bytes directly after the input
+		//true sequence vec = all sequences are minimal but not identical grab from a vec
 		let sequence: u32 = match global_sequence_var {
 			true if sequence_vec.len() == 0 => global_sequence,
 			true => sequence_vec[i],
 			false => {
 				let sequence = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length"));
+				println!("0000 Sequence = {}", hex::encode(&tx[index..index+4]));
 				index += 4;
 				sequence
 			}
 		};
 		
-
-		//let witness_count = tx[index];
-		//index += 1;
-
 		//let block_hash = match rpc.get_block_hash(block_height as u64) {
 		//	Ok(hash) => hash,
 		//	Err(e) => {
@@ -334,26 +327,14 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		//};
 
 		//let txid = block_data.txdata[block_index].txid();
+		//TODO: Grab txid for testing
 		let txid = txid_vec[i];
-		println!("TxId = {}", txid);
-		println!("Vout = {}", vout);
-		println!("Script = {}", script);
-		println!("Sequence = {}", sequence);
 
-		
-		//for _ in 0..witness_count {
-//
-//			let witness_length = tx[index] as usize;
-//			println!("Witness Length = {}", witness_length);
-//			index += 1;
-//
-//			println!("Witness = {}", hex::encode(&tx[index..index+witness_length]));
-//			witness_vec.push(tx[index..index+witness_length].to_vec());
-//			index += witness_length;
-//
-//		}
 
-		let outpoint = OutPoint::new(txid, vout);
+		recoverable_signatures.push(recoverable_sigs);
+
+		//assemble OutPoint
+		let outpoint = OutPoint::new(txid, vout as u32);
 		let txin = TxIn {
 			previous_output: outpoint,
 			script_sig: script,
@@ -365,21 +346,24 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 	
 	let mut tx_outs = Vec::new();
 	for i in 0..output_count {
+		//Grab varint amount
 		let (amount, smindex) = from_varint(&tx, index);
-		index += smindex;
 		println!("Amount = {}", amount);
+		index += smindex;
 
+		//If output type is not identical grab as the next byte
 		let mut output_type_str = output_type;
 		let output_type_byte = to_bits(tx[index]).to_string();
-		println!("test = {}", output_type_byte);
 		if !output_type_identical {
 			output_type_str = &output_type_byte[5..8];
+			println!("Output Type = {}", output_type_str);
 			index += 1;
 		}
-		println!("output_?tr = {}", output_type_str);
 		let script_pubkey = match output_type_str {
 			"001" => {
+				//p2sh
 				let bytes = &tx[index..index+20];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
 				index += 20;
 				let mut script: Vec<u8> = Vec::new();
 				script.push(169);
@@ -396,7 +380,9 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 				script_pubkey
 			},
 			"010" => {
+				//p2pkh
 				let bytes = &tx[index..index+20];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
 				index += 20;
 				let mut script: Vec<u8> = Vec::new();
 				script.push(118);
@@ -415,7 +401,9 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 				script_pubkey
 			},
 			"011" => {
+				//p2pk
 				let bytes = &tx[index..index+65];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
 				index += 65;
 				let mut script: Vec<u8> = Vec::new();
 				script.push(65);
@@ -431,7 +419,9 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 				script_pubkey
 			},
 			"100" => {
+				//v0_p2wpkh
 				let bytes = &tx[index..index+20];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
 				index += 20;
 				let mut script: Vec<u8> = Vec::new();
 				script.push(0);
@@ -446,8 +436,28 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 				};
 				script_pubkey
 			},
-			"110" => {
+			"101" => {
+				//v0_p2wsh
 				let bytes = &tx[index..index+32];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
+				index += 32;
+				let mut script: Vec<u8> = Vec::new();
+				script.push(0);
+				script.push(32);
+				script.extend(bytes);
+				let script_pubkey = match Script::from_hex(&hex::encode(script)) {
+					Ok(ss) => ss,
+					Err(e) => {
+						println!("error = {}", e);
+						return Err(e.to_string());
+					}
+				};
+				script_pubkey
+			},
+			"110" => {
+				//p2tr
+				let bytes = &tx[index..index+32];
+				println!("Script = {}", hex::encode(&tx[index..index+20]));
 				index += 32;
 				let mut script: Vec<u8> = Vec::new();
 				script.push(81);
@@ -463,8 +473,9 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 				script_pubkey
 			},
 			"111" => {
+				//Custom Script
 				let script_length = tx[index] as usize;
-				println!("Script length = {}", script_length);
+				println!("Script Length = {}", script_length);
 				index += 1;
 
 				let script_pubkey = match Script::from_hex(&hex::encode(&tx[index..index+script_length])) {
@@ -474,16 +485,12 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 						return Err(e.to_string());
 					}
 				};
-				println!("Script = {}", script_pubkey);
+				println!("Script = {}", hex::encode(&tx[index..index+script_length]));
 				index += script_length;
 				script_pubkey
 			}
 			_ => return Err("Invalid Output Script Compression Byte".to_string())
 		};
-		println!("Script = {}", script_pubkey);
-		println!("script = script = {}", script_pubkey == trans.output[i].script_pubkey);
-		println!("script = {}", script_pubkey);
-		println!("script = {}", trans.output[i].script_pubkey);
 		
 		let tx_out = TxOut {
 			value: amount,
@@ -492,46 +499,89 @@ fn deserialize(tx_hex: String, rpc: bitcoincore_rpc::Client, trans: Transaction,
 		tx_outs.push(tx_out);
 	};
 
-	println!("input = {}", tx_ins == trans.input);
-	println!("output = {}", tx_outs == trans.output);
-	println!("lock_time = {}", lock_time == trans.lock_time);
-	println!("lt = {}", lock_time);
-	println!("tr.lt = {}", trans.lock_time);
-	println!("v = {}", version == trans.version);
-	
-	let transaction = Transaction {
+	//Assemble Transaction
+	let mut transaction = Transaction {
 		version: version,
 		lock_time: lock_time,
-		input: tx_ins,
+		input: tx_ins.clone(),
 		output: tx_outs
 	};
-	//if &control[2..4] == "10" {
-	//	loop {
-	//		let valid: bool = match transaction.verify() {
-	//			Ok(tx) => true,
-	//			Err(error) => {
-	//				println!("erorr = {}", error);
-	//				false
-	//			}
-	//		};
-	//		if valid {
-	//			break
-	//		};
-	//		lock_time += u32::pow(2,16);
-	//		println!("Locktime S = {}", lock_time);
-	//	}
-	//};
+
+	if input_type == "10" {
+		let script_pubkey = match rpc.get_tx_out(&tx_ins[0].previous_output.txid, tx_ins[0].previous_output.vout, Some(false)) {
+			Ok(r) => match r {
+				Some(rs) => match rs.script_pub_key.script() {
+					Ok(pk) => pk,
+					Err(err) => {
+						println!("error = {}", err);
+						return Err(err.to_string());
+					}
+				},
+				None => {
+					println!("error = {}", "Cannot find Tx Out");
+					return Err("Cannot find TX Out".to_string());
+				}
+			},
+			Err(err) => {
+				println!("error = {}", err);
+				return Err(err.to_string());
+			}
+		};
+		println!("sc = {}", script_pubkey);
+
+		let sig_hash = transaction.signature_hash(0, &script_pubkey, 0x1 as u32);
+		println!("sig_hash  = {}", sig_hash);
+
+		let message = secp256k1::Message::from_slice(&sig_hash.to_vec()).expect("Could Not Get Message From SigHash");
+
+		let ctx = Secp256k1::new();
+		let pk0 = ctx.recover_ecdsa(&message, &recoverable_signatures[0][0]).expect("Error Derving Public Key");
+		let pk1 = ctx.recover_ecdsa(&message, &recoverable_signatures[0][1]).expect("Error Derving Public Key");
+		println!("pk0 = {}", pk0);
+		println!("pk1 = {}", pk1);
+
+		let bpk1 = bitcoin::PublicKey::new(pk1);
+		//let scpk1 = bitcoin::util::address::Address::p2pkh(&bpk1, Network::Bitcoin).script_pubkey();
+		let scpk1 = bitcoin::util::address::Address::p2wpkh(&bpk1, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		if scpk1 == script_pubkey {
+			println!("pk1");
+		}
+
+		let bpk0 = bitcoin::PublicKey::new(pk0);
+		let scpk0 = bitcoin::util::address::Address::p2wpkh(&bpk0, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		if scpk0 == script_pubkey {
+			println!("pk0");
+		}
+
+			
+		//let mut hasher = sha256::Hash::new();
+		//let mut hasher = sha256::HashEngine::default();
+		//pk0.hash(&mut hasher);
+		//println!("pk0h = {}", hasher.finish());
+		//let message = Message::from_hashed_data::<sha256::Hash>(&pk0.to_vec());
+	}else if &control[2..4] == "10" {
+		//Custom Script but half compressed locktime
+		let pow16 = u32::pow(2, 16);
+		//loop {
+		//	match transaction.verify(Spent) {
+		//		Ok(_) => break,
+		//		Err(_) => transaction.lock_time += pow16
+		//	};
+		//}
+	}
+
+	
 	println!("transaction == trans = {}", transaction == trans);
-	println!("send");
-	//match rpc.send_raw_transaction(&transaction) {
-	//	Ok(r) => println!("{}", r),
-	//	Err(e) => println!("{}", e)
-	//};
-	Ok("donet".to_string())
+	if transaction != trans {
+		panic!("Could not Compress Transaction");
+	}
+	Ok("done".to_string())
 }
 
-pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<String, String> {
+pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Result<String, String> {
+	//Declare Result
 	let mut compressed_transaction = Vec::new();
+	//Transaction from hex to bytes
 	let bytes = match Vec::from_hex(&tx) {
 		Ok(bytes) => bytes,
 		Err(error) => {
@@ -539,33 +589,22 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 			return Err(error.to_string())
 		}
 	};
-	println!("bytes: ");
-	for byte in &bytes {
-		print!("{:02x}, ", byte);
-	}
-	println!(";");
-	let mut transaction = match Transaction::deserialize(&bytes) {
+
+	//Deserialize Transaction
+	let transaction = match Transaction::deserialize(&bytes) {
 		Ok(transaction) => transaction,
 		Err(error) => {
 			return Err(error.to_string())
 		}
 	};
 
+	//Get the Current Block height
 	let block_height = match rpc.get_block_count() {
 		Ok(bh) => bh,
 		Err(err) => return Err(err.to_string())
 	};
-	transaction.lock_time = 751723;
-	//transaction.output.pop();
-	//transaction.input.push(transaction.input[0].clone());
-	//transaction.input.push(transaction.input[0].clone());
-	//transaction.input[0].sequence = 0x0000000E;
-	//transaction.input[1].sequence = 0x0000000E;
-	//transaction.input[2].sequence = 0x0000000E;
-	//transaction.input[3].sequence = 0x0000000E;
-
-	println!("Version = {}", transaction.version as u8);
 	
+	//Match the version with binary "00" means uncompressed
 	let version_str = match transaction.version {
 		1 => "01",
 		2 => "10",
@@ -573,49 +612,44 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 		_ => "00"
 	};
 
+	// limit = 2^16
 	let limit = u32::pow(2, 16);
-	let bhl = (block_height / limit as u64) * limit as u64;
-	let ltl = ((transaction.lock_time / limit) * limit) as u64;
-	println!("bhl - ltl = {}", bhl - ltl);
-	let lock_time_str = match transaction.lock_time {
-		0 => "01",
-		_ if bhl >= ltl && bhl - ltl < 100  => "10",
-		_ if ltl >= bhl && ltl - bhl < 100  => "10",
-		_ => "00"
-	};
-	println!("bhl = {}", bhl);
-	println!("lock_time_str = {}", lock_time_str);
 
+	//If the Lock time is zero we can repersent that as a single bit(Otherwise half compress it)
+	let lock_time_str = match transaction.lock_time {
+		0 => "0",
+		_ => "1"
+	};
+
+	//Assemble Control Bit v = version, l = lock_time (vvl00000)
 	let mut control_str = String::new();
 	control_str += version_str;
 	control_str += lock_time_str;
-	control_str += "0000";
+	control_str += "00000";
 
+	//Push control bit
 	let control: u8 = u8::from_str_radix(&control_str, 2).unwrap();
-	println!("Control = {}", control);
 	compressed_transaction.push(control);
+	println!("Control = {}", control_str);
 
+	//If version was uncompressed Push version
+	//TODO make varint
 	if version_str == "00" {
 		compressed_transaction.extend(u32_to_4_bytes(transaction.version as u32));
+		println!("Version = {}", hex::encode(hex::encode(u32_to_4_bytes(transaction.version as u32))));
 	}
 
-	println!("Locktime = {}", transaction.lock_time);
-	if lock_time_str == "00" {
-		let lock_time = u32_to_4_bytes(transaction.lock_time);
-		compressed_transaction.extend(lock_time);
-		println!("Locktime L = {}", transaction.lock_time);
-	} else if lock_time_str == "10" {
+	//If lock_time was uncompressed Push Lock_Time
+	if lock_time_str == "1" {
 		let second_lock = (transaction.lock_time % limit) as u16;
 		let lock_time = u16_to_2_bytes(second_lock);
+		println!("Lock Time = {}", hex::encode(u16_to_2_bytes(second_lock)));
 		compressed_transaction.extend(lock_time);
-		println!("Locktime S = {}", second_lock);
-	} else if lock_time_str == "01" {
-		println!("Locktime 0");
 	}
-	
 
-	let mut input_str = String::new();
-	input_str += match transaction.input.len() {
+	//Convert the number of inputs to binary "00" is uncompressed varint
+	
+	let input_count = match transaction.input.len() {
 		1 => "01",
 		2 => "10",
 		3 => "11",
@@ -623,6 +657,7 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 	};
 	
 
+	//Compress the Sequence using the top three most popular values and weather or not they are identical and if we have only a few inputs
 	let mut sequence_vec = Vec::new();
 	let mut sequence_small = true;
 	for i in 0..transaction.input.len() { 
@@ -649,7 +684,7 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 			sequence_str = "0100".to_string();
 		}
 	} else if sequence_small {
-		if input_str != "00" {
+		if input_count != "00" {
 			sequence_str = "1000".to_string();
 			for i in 0..transaction.input.len() {
 				sequence_byte += &sequence_vec[i];
@@ -658,145 +693,185 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 				sequence_byte += "00";
 			}
 		}
-		// else {
-		//	sequence_str = "0011".to_string();
-		//}
 	}
 
-	println!("Sequence Str = {}", sequence_str);
-	println!("Sequence Byte = {}", sequence_byte);
-	input_str += &sequence_str;
-
-
-	let mut input_type_str = "00";
-	let mut input_identical = true;
-
-	let script = transaction.input[0].script_sig.as_bytes();
-	if script.len() == 138 && script[0] == 71 && script[72] == 65 {
-		input_type_str = "01"
-	} else if script.len() == 0 {
-		if transaction.input[0].witness.len() == 1 {
-			input_type_str = "11"
-		} else {
-			input_type_str = "10"
-		}
-	}
-
-	for i in 0..transaction.input.len() {
-		if input_type_str == "01" && input_identical {
-			let script = transaction.input[i].script_sig.as_bytes();
-			if !(script.len() == 138 && script[0] == 71 && script[72] == 65) {
-				input_type_str = "00";
-				input_identical = false;
+	fn get_script_sig(script: &Script) -> Result<Option<Vec<u8>>, String> {
+		let mut index = 0;
+		for instruction in script.instructions() {
+			//Not legacy with more then 2 pushes
+			if index > 2 {
+				break
 			}
-		} else if input_type_str == "10" && input_identical {
-			if transaction.input[i].witness.len() != 2 {
-				input_type_str = "00";
-				input_identical = false;
-			} 
-		} else if input_type_str == "11" && input_identical {
-			if transaction.input[i].witness.len() != 1 {
-				input_type_str = "00";
-				input_identical = false;
-			} 
+			//Get instruction
+			let instruct = match instruction {
+				Ok(i) => i,
+				Err(err) => return Err(err.to_string())
+			};
+			match instruct {
+				Instruction::PushBytes(data) => {
+					if index == 0 {
+						//convert bytes to signature
+						match secp256k1::ecdsa::Signature::from_der_lax(data) {
+							Ok(signature) => {
+								return Ok(Some(signature.serialize_compact().to_vec()));
+							},
+							Err(_) => break
+						};
+					}
+				},
+				Instruction::Op(_) => {
+					//If any op codes other then pushbytes not Legacy
+					break
+				}
+			}
+			index += 1;
 		}
-		if !input_identical {
+		return Ok(None)
+	}
+
+	
+	fn get_input_type(script: &Script, witness: &Witness) -> Result<String, String> {
+		if script.as_bytes().len() == 0 {
+			if witness.len() == 1 {
+				return Ok("11".to_string())
+			} else {
+				return Ok("10".to_string())
+			}
+		} else {
+			match get_script_sig(script) {
+				//Legacy script
+				Ok(Some(_)) => return Ok("01".to_string()),
+				//Custom Script
+				Ok(None) => return Ok("00".to_string()),
+				Err(err) => return Err(err.to_string())
+			}
+		}
+	}
+
+	//Get input type
+	let script = &transaction.input[0].script_sig;
+	let witness = &transaction.input[0].witness;
+	let mut input_type_str = match get_input_type(script, &witness) {
+		Ok(is) => is,
+		Err(err) => return Err(err.to_string())
+	};
+
+	//Get input Identicalness
+	let mut input_identical = true;
+	for i in 0..transaction.input.len() {
+		let script = &transaction.input[i].script_sig;
+		let witness = &transaction.input[0].witness;
+		let ist = match get_input_type(script, &witness) {
+			Ok(is) => is,
+			Err(err) => return Err(err.to_string())
+		};
+		if ist != input_type_str {
+			input_identical = false;
 			break
 		}
 	}
+
+	//Assemble the input_str input count = c, sequence = s, custom script? = u, identical types = i (ccssssui)
+	let mut input_str = String::new();
+	input_str += input_count;
+	input_str += &sequence_str;
+	if input_type_str == "00" {
+		input_str += "1";
+	} else {
+		input_str += "0";
+	}
+	if input_identical {
+		input_str += "1";
+	} else {
+		input_str += "0";
+	}
 	
-	input_str += input_type_str;
 	let input: u8 = u8::from_str_radix(&input_str, 2).unwrap();
-	println!("Input Str = {}", input_str);
 	compressed_transaction.push(input);
+	println!("Input = {}", to_bits(input));
+
+	//If input count greater than 3 push varint
 	if &input_str[0..2] == "00" {
 		compressed_transaction.extend(to_varint(transaction.input.len() as i64));
-		println!("Input Count = {}", transaction.input.len() as i64);
+		println!("Input Count = {}", transaction.input.len());
 	}
+
+	//If sequnce is unique but identical push as 4 bytes
+	//If sequence is not identical but also not unique and the inputs are less then 4 push the compressed sequence bit pairs as a byte
 	if sequence_str == "0100" {
 		compressed_transaction.extend(u32_to_4_bytes(transaction.input[0].sequence));
+		println!("0100 Sequence = {}", hex::encode(u32_to_4_bytes(transaction.input[0].sequence)));
 	} else if sequence_str == "1000" {
 		compressed_transaction.push(u8::from_str_radix(&sequence_byte, 2).unwrap());
+		println!("1000 Sequence = {}", u8::from_str_radix(&sequence_byte, 2).unwrap());
 	}
 
 	let mut output_str = String::new();
+	//Get output count and compress if less then 4
 	output_str += match transaction.output.len() {
 		1 => "01",
 		2 => "10",
 		3 => "11",
 		_ => "00"
 	};
-	let mut output_type_identical = true;
+	//Determan output type and identicalness
+	
 	let script = &transaction.output[0].script_pubkey;
-	let mut output_type_str = "111";
-	if script.is_p2sh() {
-		output_type_str = "001"
-	} else if script.is_p2pkh() {
-		output_type_str = "010"
-	} else if script.is_p2pk() {
-		output_type_str = "011"
-	} else if script.is_v0_p2wpkh() {
-		output_type_str = "100"
-	} else if script.is_v0_p2wsh() {
-		output_type_str = "101"
-	} else if script.is_v1_p2tr() {
-		output_type_str = "110"
-	}
-	for i in 0..transaction.output.len() {
-		if !output_type_identical {
-			break
-		}
-		let script = &transaction.output[i].script_pubkey;
+
+
+	fn get_output_type(script: &Script) -> String {
 		if script.is_p2sh() {
-			if !(output_type_str == "001") {
-				output_type_identical = false;
-			}
+			return "001".to_string()
 		} else if script.is_p2pkh() {
-			if !(output_type_str == "010") {
-				output_type_identical = false;
-			}
+			return "010".to_string()
 		} else if script.is_p2pk() {
-			if !(output_type_str == "011") {
-				output_type_identical = false;
-			}
+			return "011".to_string()
 		} else if script.is_v0_p2wpkh() {
-			if !(output_type_str == "100") {
-				output_type_identical = false;
-			}
+			return "100".to_string()
 		} else if script.is_v0_p2wsh() {
-			if !(output_type_str == "101") {
-				output_type_identical = false;
-			}
+			return "101".to_string()
 		} else if script.is_v1_p2tr() {
-			if !(output_type_str == "110") {
-				output_type_identical = false;
-			}
+			return "110".to_string()
 		} else {
-			if !(output_type_str == "111") {
-				output_type_identical = false;
-			}
+			//Custom Script
+			return "111".to_string()
+		}
+	}
+
+	//Check if output type is identical
+	let mut output_type_identical = true;
+	let output_type_str = get_output_type(script);
+	for i in 0..transaction.output.len() {
+		let script = &transaction.output[i].script_pubkey;
+		let ots = get_output_type(script);
+		if ots != output_type_str {
+			output_type_identical = false;
 		}
 	}
 	
+	//If output type is identical then push here as a 3 bit number else 000 as unique
 	if output_type_identical {
-		output_str += output_type_str;
+		output_str += &output_type_str;
 	} else {
 		output_str += "000";
 	}
-	
+	//TODO: 3 unused bits
 	output_str += "000";
 	let output: u8 = u8::from_str_radix(&output_str, 2).unwrap();
-	println!("Output Str = {}", output_str);
 	compressed_transaction.push(output);
+	println!("Output = {}", output_str);
 
+	//If output count was more then 3 push varint
 	if &output_str[0..2] == "00" {
 		compressed_transaction.extend(to_varint(transaction.output.len() as i64));
-		println!("Output Count = {}", transaction.output.len() as i64);
+		println!("Output Count = {}", transaction.output.len())
 	}
 
+	//TODO: remove, used instead of block finding when txid is not in wallet
 	let mut txid_vec = Vec::new();
 	
 	for i in 0..transaction.input.len() {
+		//Hard coded compression when having no wallet loaded
 		let (height, index) = ([0,0,14,16],[19,91]);
 		//let (height, index) = match rpc.get_transaction(&transaction.input[i].previous_output.txid, Some(true)) {
 		//	Ok(blob) => {
@@ -815,152 +890,167 @@ pub fn compress_transaction(tx: String, rpc: bitcoincore_rpc::Client) -> Result<
 		
 		
 		compressed_transaction.extend(height);
-		println!("Height = {}", hex::encode(height));
+		println!("Block Height = {}", hex::encode(height));
 
 		compressed_transaction.extend(index);
-		println!("Index = {}", hex::encode(index));
+		println!("Block Index = {}", hex::encode(index));
 
+		//TODO: remove when not deserlizing
 		txid_vec.push(transaction.input[i].previous_output.txid);
-		println!("TxId = {}", transaction.input[i].previous_output.txid);
 
-		compressed_transaction.push(transaction.input[i].previous_output.vout as u8);
+		compressed_transaction.extend(to_varint(transaction.input[i].previous_output.vout as i64));
 		println!("Vout = {}", transaction.input[i].previous_output.vout);
 
-		println!("Script Hex = {}", hex::encode(transaction.input[i].script_sig.as_bytes()));
-		println!("Script = {}", transaction.input[i].script_sig);
-		let script = transaction.input[i].script_sig.as_bytes();
-		match &input_str[6..8] {
+		if !input_identical {
+			let script = &transaction.input[i].script_sig;
+			let witness = &transaction.input[i].witness;
+			input_type_str = match get_input_type(script, witness) {
+				Ok(its) => its,
+				Err(err) => return Err(err.to_string())
+			};
+			if input_type_str != "00" {
+				compressed_transaction.push(1);
+				println!("Custom Script = {}", 1);
+			} else {
+				compressed_transaction.push(0);
+				println!("Custom Script = {}", 0);
+			}
+			
+		}
+		match input_type_str.as_str() {
 			"01" => {
-				let script_sig = &script[1..72];
-				let pubkey = &script[73..138];
-				compressed_transaction.extend(script_sig);
-				compressed_transaction.extend(pubkey);
+				let script = &transaction.input[i].script_sig;
+				let compact_signature = match get_script_sig(script) {
+					Ok(Some(sig)) => sig,
+					Err(err) => return Err(err.to_string()),
+					Ok(None) => return Err("Invalid Compression".to_string())
+				};
+				compressed_transaction.extend(&compact_signature);
+				println!("01 Sig = {}", hex::encode(&compact_signature));
 			},
-			"10" => {
-				println!("No Script");
-				let signature = secp256k1::ecdsa::Signature::from_der(&transaction.input[i].witness.to_vec()[0]);
+			"10" | "11" => {
+				//Segwit uses witnesses the first witness is always the script_sig
+				let signature = match secp256k1::ecdsa::Signature::from_der_lax(&transaction.input[i].witness.to_vec()[0]) {
+					Ok(ss) => ss,
+					Err(err) => return Err(err.to_string())
+				};
+				let compact_signature = signature.serialize_compact().to_vec();
 
-
-				//println!("sig = {}", signature);
-				//compressed_transaction.push(transaction.input[i].witness.to_vec()[x].len() as u8);
-			},
-			"11" => {
-				println!("post TR");
-				println!("wit = {}", hex::encode(transaction.input[i].witness.to_vec()[0].clone()));
-				compressed_transaction.extend(transaction.input[i].witness.to_vec()[0].clone());
+				compressed_transaction.extend(&compact_signature);
+				println!("10 | 11 Sig = {}", hex::encode(&compact_signature));
 			}
 			_ => {
+				//Custom Signature
 				compressed_transaction.push(transaction.input[i].script_sig.len() as u8);
-				println!("Script length = {}", transaction.input[i].script_sig.len() as u8);
+				println!("Script Length = {}", transaction.input[i].script_sig.len());
 				
 				compressed_transaction.extend(transaction.input[i].script_sig.to_bytes());
-				println!("Script = {}", transaction.input[i].script_sig);
+				println!("Script = {}", hex::encode(&transaction.input[i].script_sig.to_bytes()));
+
+				let witnesses = transaction.input[i].witness.to_vec();
+				compressed_transaction.push(witnesses.len() as u8);
+				println!("Witnesses Length = {}", witnesses.len());
+
+				for x in 0..witnesses.len() {
+					let witness = &witnesses[x];
+
+					compressed_transaction.push(witness.len() as u8);
+					println!("Witness Length = {}", witness.len());
+
+					compressed_transaction.extend(&witness.to_vec());
+					println!("Witness = {}", hex::encode(&witness.to_vec()));
+				}
 			}
 		}
-
+		//If sequence could not be compressed append now
 		if sequence_str == "0000" {
 			compressed_transaction.extend(u32_to_4_bytes(transaction.input[i].sequence));
-			println!("Sequence = {}", transaction.input[i].sequence);
+			println!("0000 Sequence = {}", hex::encode(u32_to_4_bytes(transaction.input[i].sequence)));
 		} 
 
-		//compressed_transaction.push(transaction.input[i].witness.to_vec().len() as u8);
-		//println!("Witness Count = {}", transaction.input[i].witness.to_vec().len() as u8);
-
-		//for x in 0..transaction.input[i].witness.to_vec().len() {
-		//	compressed_transaction.push(transaction.input[i].witness.to_vec()[x].len() as u8);
-		//	println!("Witness length = {}", transaction.input[i].witness.to_vec()[x].len() as u8);
-//
-//			compressed_transaction.extend(transaction.input[i].witness.to_vec()[x].clone());
-//			println!("Witness = {}", hex::encode(transaction.input[i].witness.to_vec()[x].clone()));
-//		}
 	}
 	
 	for i in 0..transaction.output.len() {
 		compressed_transaction.extend(to_varint(transaction.output[i].value as i64));
-
-		//compressed_transaction.extend(u64_to_8_bytes(transaction.output[i].value));
 		println!("Amount = {}", transaction.output[i].value);
+
 		let script = &transaction.output[i].script_pubkey;
-		println!("Script = {}", script);
-		println!("Script Hex = {}", hex::encode(transaction.output[i].script_pubkey.as_bytes()));
-		let mut output_type_str = "111";
-		if script.is_p2sh() {
-			println!("p2sh");
-			output_type_str = "001"
-		} else if script.is_p2pkh() {
-			println!("p2pkh");
-			output_type_str = "010"
-		} else if script.is_p2pk() {
-			println!("p2pk");
-			output_type_str = "011"
-		} else if script.is_v0_p2wpkh() {
-			println!("v0_p2wpkh");
-			output_type_str = "100"
-		} else if script.is_v0_p2wsh() {
-			println!("v0_p2wsh");
-			output_type_str = "101"
-		} else if script.is_v1_p2tr() {
-			println!("v1_p2tr");
-			output_type_str = "110"
-		} else {
-			println!("Unknow script");
-		}
-		println!("output type = {}", output_type_str);
+		let output_type_str = get_output_type(script);
 		let scriptb = &script.to_bytes();
-		match output_type_str {
+		match output_type_str.as_str() {
 			"001" => {
 				if !output_type_identical {
+					//If output type is not identical push before every output
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
-				compressed_transaction.extend(scriptb[2..scriptb.len()-1].to_vec())
+				compressed_transaction.extend(scriptb[2..scriptb.len()-1].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[2..scriptb.len()-1].to_vec()));
 			},
 			"010" => {
 				if !output_type_identical {
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
-				compressed_transaction.extend(scriptb[3..scriptb.len()-2].to_vec())
+				compressed_transaction.extend(scriptb[3..scriptb.len()-2].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[3..scriptb.len()-2].to_vec()));
 			},
 			"011" => {
 				if !output_type_identical {
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
-				compressed_transaction.extend(scriptb[1..scriptb.len()-1].to_vec())
+				compressed_transaction.extend(scriptb[1..scriptb.len()-1].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[1..scriptb.len()-1].to_vec()));
 			},
 			"100" => {
 				if !output_type_identical {
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
-				compressed_transaction.extend(scriptb[2..scriptb.len()].to_vec())
+				compressed_transaction.extend(scriptb[2..scriptb.len()].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[2..scriptb.len()].to_vec()));
+			},
+			"101" => {
+				if !output_type_identical {
+					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
+				}
+				compressed_transaction.extend(scriptb[2..scriptb.len()].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[2..scriptb.len()].to_vec()));
 			},
 			"110" => {
 				if !output_type_identical {
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
-				compressed_transaction.extend(scriptb[2..scriptb.len()].to_vec())
+				compressed_transaction.extend(scriptb[2..scriptb.len()].to_vec());
+				println!("Output Script = {}", hex::encode(&scriptb[2..scriptb.len()].to_vec()));
 			},
 			"111" => {
+				//Custom Script
 				if !output_type_identical {
 					compressed_transaction.push(u8::from_str_radix(&output_type_str, 2).unwrap());
+					println!("Output Type = {}", output_type_str);
 				}
 				compressed_transaction.push(transaction.output[i].script_pubkey.len() as u8);
-				println!("Script Length = {}", transaction.output[i].script_pubkey.len() as u8);
+				println!("Script Length = {}", transaction.output[i].script_pubkey.len());
 
 				compressed_transaction.extend(transaction.output[i].script_pubkey.to_bytes());
-				println!("Script = {}", transaction.output[i].script_pubkey);
-				println!("Script Hex = {}", hex::encode(transaction.output[i].script_pubkey.to_bytes()));
+				println!("Script = {}", hex::encode(transaction.output[i].script_pubkey.to_bytes()));
 			}
 			_ => return Err("Unknown error Compressing Output Script".to_string())
 		};
 	}
-	//panic!("Script Encoding");
 
 	let result = hex::encode(compressed_transaction);
-	println!("len tx = {}", tx.len());
-	println!("len result = {}", result.len());
-	println!("tx = {}", tx);
-	println!("result = {}", result);
-
-	return deserialize(result, rpc, transaction, txid_vec);
+	match deserialize(&result, rpc, transaction, txid_vec) {
+		Ok(_) => println!("Success"),
+		Err(err) => {
+			panic!("err: {}", err.to_string());
+		}
+	};
+	return Ok(result)
 }
 
 pub fn valid_transaction(tx: String) -> String {

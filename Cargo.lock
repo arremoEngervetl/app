@@ -2235,6 +2235,7 @@ version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26947345339603ae8395f68e2f3d85a6b0a8ddfe6315818e80b8504415099db0"
 dependencies = [
+ "bitcoin_hashes",
  "secp256k1-sys",
  "serde",
 ]
