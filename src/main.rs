@@ -89,31 +89,32 @@ impl Sandbox for App {
                                              self.rpcpass.clone())).unwrap();
                
                 let bc = rpc.get_block_count().expect("Could Not Get Block Count");
-                for i in 700000..bc {
-                    println!("B-----------------------------------------------------I = {}", i);
-                    let bh = rpc.get_block_hash(i).expect("Could Not Get Block Hash");
-                    let txs = rpc.get_block_info(&bh).expect("Could Not Get Block Info").tx;
-                    for x in 0..txs.len() {
-                        println!("T-----------------------------------------------------X = {}", x);
-                        let tx = txs[x];
-                        println!("tx = {}", tx);
-                        let transaction = rpc.get_raw_transaction_hex(&tx, Some(&bh)).expect("Could Not Find Transaction");
-                        let ctx = match compress_transaction(&transaction, &rpc) {
-                            Ok(ctx) => ctx,
-                            Err(err) => {
-                                println!("err: {}", err);
-                                self.error = err.to_string();
-                                break
-                            }
-                        };
-                        println!("tranlen = {}, ctxlen = {}, diff = {}", transaction.len(), ctx.len(), transaction.len()-ctx.len());
-                    }
-                    println!("bc = {}", i);
-                }
+                // 'L: for y in 0..100000 {
+                //     let i = bc - y;
+                //     println!("B-----------------------------------------------------I = {}", i);
+                //     let bh = rpc.get_block_hash(i).expect("Could Not Get Block Hash");
+                //     let txs = rpc.get_block_info(&bh).expect("Could Not Get Block Info").tx;
+                //     for x in 0..txs.len() {
+                //         println!("T-----------------------------------------------B = {} X = {}", i, x);
+                //         let tx = txs[x];
+                //         println!("tx = {}", tx);
+                //         let transaction = rpc.get_raw_transaction_hex(&tx, Some(&bh)).expect("Could Not Find Transaction");
+                //         let ctx = match compress_transaction(&transaction, &rpc) {
+                //             Ok(ctx) => ctx,
+                //             Err(err) => {
+                //                 println!("err: {}", err);
+                //                 self.error = err.to_string();
+                //                 break 'L
+                //             }
+                //         };
+                //         println!("tranlen = {}, ctxlen = {}, diff = {}", transaction.len(), ctx.len(), transaction.len()-ctx.len());
+                //     }
+                //     println!("bc = {}", i);
+                // }
                 //if self.error == "" {
                     //self.step += 1;
                 //}
-                //let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
+                let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
             }
             Message::ClearPressed => {
                 self.error = "".to_string();

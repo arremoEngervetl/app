@@ -114,24 +114,31 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		"10" => 2,
 		"11" => 3,
 		"00" => {
-			let vers = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length")) as i32
+			let vers = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length")) as i32;
 			println!("Version = {}", hex::encode(&tx[index..index+4]));
 			index += 4;
+			vers
 		},
 		_ => return Err("Invalid Version Compression Bit".to_string())
 	};
 
 	//Parse Lock Time
 	let mut lock_time: u32 = 0;
-	match &control[2..3] {
-		"1" => {
+	match &control[2..4] {
+		"11" => {
 			//If lock time was not zero grab the next 4 bytes
 			let second_lock = u16::from_be_bytes(tx[index..index+2].try_into().expect("slice with incorrect length"));
-			println!("Lock Time 1 = {}", hex::encode(&tx[index..index+2]));
-			index += 1;
+			println!("Lock Time S = {}", hex::encode(&tx[index..index+2]));
+			index += 2;
 			lock_time = second_lock as u32;
 		},
-		"0" => {
+		"10" => {
+			let (lock_time_tmp, smindex) = from_varint(&tx, index);
+			index += smindex;
+			lock_time = lock_time_tmp as u32;
+			println!("Lock Time = {}", lock_time);
+		},
+		"00" => {
 		},
 		_ => return Err("Invalid Locktime Compression Bit".to_string())
 	}
@@ -220,6 +227,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 
 	let mut tx_ins = Vec::new();
 	let mut recoverable_signatures = Vec::new();
+	let mut half_finished_inputs = Vec::new();
 	for i in 0..input_count {
 
 		let block_height = u32::from_be_bytes(tx[index..index+4].try_into().expect("slice with incorrect length"));
@@ -239,7 +247,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		let mut input_type_str = input_type;
 		let input_type_byte = to_bits(tx[index]).to_string();
 		if !input_type_identical {
-			input_type_str = &input_type_byte[5..8];
+			input_type_str = &input_type_byte[7..8];
 			index += 1;
 		}
 
@@ -250,7 +258,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 				//"1" input type is a compressed compact signature
 				let script = Script::new();
 				let bytes = &tx[index..index+64];
-				println!("Script = {}", hex::encode(&tx[index..index+64]));
+				println!("01 10 11 Sig = {}", hex::encode(&tx[index..index+64]));
 				index += 64;
 				let recoverable_signature_0 = secp256k1::ecdsa::RecoverableSignature::from_compact(&bytes, secp256k1::ecdsa::RecoveryId::from_i32(0).expect("Could not create RecoveryId")).expect("Could Not Recover Signature");
 				let recoverable_signature_1 = secp256k1::ecdsa::RecoverableSignature::from_compact(&bytes, secp256k1::ecdsa::RecoveryId::from_i32(1).expect("Could not create RecoveryId")).expect("Could Not Recover Signature");
@@ -258,6 +266,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 				recoverable_sigs.push(recoverable_signature_1);
 				let witness_vec_vec: Vec<Vec<u8>> = Vec::new();
 				let witness = Witness::from_vec(witness_vec_vec.clone());
+				half_finished_inputs.push(i);
 				(script, witness)
 			},
 			_  => {
@@ -278,7 +287,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 				index += 1;
 
 				let mut witness_vec_vec: Vec<Vec<u8>> = Vec::new();
-				for x in 0..witness_count {
+				for _ in 0..witness_count {
 					let witness_len = tx[index] as usize;
 					println!("Witness Length = {}", witness_len);
 					index += 1;
@@ -345,7 +354,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 	}
 	
 	let mut tx_outs = Vec::new();
-	for i in 0..output_count {
+	for _ in 0..output_count {
 		//Grab varint amount
 		let (amount, smindex) = from_varint(&tx, index);
 		println!("Amount = {}", amount);
@@ -507,8 +516,43 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		output: tx_outs
 	};
 
-	if input_type == "10" {
-		let script_pubkey = match rpc.get_tx_out(&tx_ins[0].previous_output.txid, tx_ins[0].previous_output.vout, Some(false)) {
+	if &control[2..4] == "11" {
+		let script_pubkey = match rpc.get_tx_out(&tx_ins[0].previous_output.txid, tx_ins[0].previous_output.vout, Some(true)) {
+			Ok(r) => match r {
+				Some(rs) => match rs.script_pub_key.script() {
+					Ok(pk) => pk,
+					Err(err) => {
+						println!("error1 = {}", err);
+						return Err(err.to_string());
+					}
+				},
+				None => {
+					println!("error = {}", "Cannot find Tx Out");
+					return Ok("Cannot find TX Out".to_string());
+				}
+			},
+			Err(err) => {
+				println!("error2 = {}", err);
+				return Err(err.to_string());
+			}
+		};
+		println!("sc = {}", script_pubkey);
+
+		let pow16 = u32::pow(2, 16);
+		loop {
+			let sig_hash = transaction.signature_hash(0, &script_pubkey, 0x1 as u32);
+			println!("sig_hash  = {}", sig_hash);
+			transaction.lock_time += pow16;
+			if transaction.lock_time > 1000000 {
+				break
+			}
+		}
+	}
+
+	if half_finished_inputs.len() > 0 {
+		let i = half_finished_inputs[0];
+		println!("First Half Finished Input = {}", i);
+		let script_pubkey = match rpc.get_tx_out(&tx_ins[i].previous_output.txid, tx_ins[i].previous_output.vout, Some(false)) {
 			Ok(r) => match r {
 				Some(rs) => match rs.script_pub_key.script() {
 					Ok(pk) => pk,
@@ -519,7 +563,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 				},
 				None => {
 					println!("error = {}", "Cannot find Tx Out");
-					return Err("Cannot find TX Out".to_string());
+					return Ok("Cannot find TX Out(not unspent)".to_string());
 				}
 			},
 			Err(err) => {
@@ -529,7 +573,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		};
 		println!("sc = {}", script_pubkey);
 
-		let sig_hash = transaction.signature_hash(0, &script_pubkey, 0x1 as u32);
+		let sig_hash = transaction.signature_hash(0, &script_pubkey, 0x0 as u32);
 		println!("sig_hash  = {}", sig_hash);
 
 		let message = secp256k1::Message::from_slice(&sig_hash.to_vec()).expect("Could Not Get Message From SigHash");
@@ -539,19 +583,56 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		let pk1 = ctx.recover_ecdsa(&message, &recoverable_signatures[0][1]).expect("Error Derving Public Key");
 		println!("pk0 = {}", pk0);
 		println!("pk1 = {}", pk1);
-
-		let bpk1 = bitcoin::PublicKey::new(pk1);
-		//let scpk1 = bitcoin::util::address::Address::p2pkh(&bpk1, Network::Bitcoin).script_pubkey();
-		let scpk1 = bitcoin::util::address::Address::p2wpkh(&bpk1, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
-		if scpk1 == script_pubkey {
-			println!("pk1");
-		}
-
 		let bpk0 = bitcoin::PublicKey::new(pk0);
-		let scpk0 = bitcoin::util::address::Address::p2wpkh(&bpk0, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
-		if scpk0 == script_pubkey {
-			println!("pk0");
+		let bpk1 = bitcoin::PublicKey::new(pk1);
+		if script_pubkey.is_p2sh() {
+			println!("p2sh")
+			//(bitcoin::util::address::Address::p2sh(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2sh(&bpk1, Network::Bitcoin).script_pubkey())
+		} else if script_pubkey.is_p2pkh() {
+			println!("p2pkh")
+			//(bitcoin::util::address::Address::p2pkh(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2pkh(&bpk1, Network::Bitcoin).script_pubkey())
+		} else if script_pubkey.is_p2pk() {
+			println!("p2pk")
+			//(bitcoin::util::address::Address::p2pk(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2pk(&bpk1, Network::Bitcoin).script_pubkey())
+		} else if script_pubkey.is_v0_p2wpkh() {
+			println!("p2wpkh");
+			let scpk0 = bitcoin::util::address::Address::p2wpkh(&bpk0, Network::Bitcoin).expect("Get Address").script_pubkey();
+			let scpk1 = bitcoin::util::address::Address::p2wpkh(&bpk1, Network::Bitcoin).expect("Get Address").script_pubkey();
+			println!("scpk0 = {}", scpk0);
+			println!("scpk1 = {}", scpk1);
+		} else if script_pubkey.is_v0_p2wsh() {
+			println!("p2wsh")
+			//(bitcoin::util::address::Address::p2wsh(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2wsh(&bpk1, Network::Bitcoin).script_pubkey())
+		} else if script_pubkey.is_v1_p2tr() {
+			println!("p2tr")
+			//(bitcoin::util::address::Address::p2tr(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2tr(&bpk1, Network::Bitcoin).script_pubkey())
+		} else {
+			//Custom Script
+			return Err("Cannot get pub key from custom output script".to_string())
 		}
+
+		
+		//
+		//let scpk1 = bitcoin::util::address::Address::p2wpkh(&bpk1, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		//if scpk1 == script_pubkey {
+		//	println!("pk1");
+		//}
+
+		//let bpk0 = bitcoin::PublicKey::new(pk0);
+		//let scpk0 = bitcoin::util::address::Address::p2wpkh(&bpk0, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		//if scpk0 == script_pubkey {
+		//	println!("pk0");
+		//}
+	}
+
+	for i in half_finished_inputs {
+		println!("Half Finished Input = {}", i);
+
+
+	}
+
+	if input_type == "10" {
+		
 
 			
 		//let mut hasher = sha256::Hash::new();
@@ -559,20 +640,50 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		//pk0.hash(&mut hasher);
 		//println!("pk0h = {}", hasher.finish());
 		//let message = Message::from_hashed_data::<sha256::Hash>(&pk0.to_vec());
-	}else if &control[2..4] == "10" {
+	}
+	//else if &control[2..4] == "10" {
 		//Custom Script but half compressed locktime
-		let pow16 = u32::pow(2, 16);
+		
+		//println!("hi")
 		//loop {
 		//	match transaction.verify(Spent) {
 		//		Ok(_) => break,
 		//		Err(_) => transaction.lock_time += pow16
 		//	};
 		//}
-	}
+	//}
+
+	
+		
+
+		// let message = secp256k1::Message::from_slice(&sig_hash.to_vec()).expect("Could Not Get Message From SigHash");
+
+		// let ctx = Secp256k1::new();
+		// let pk0 = ctx.recover_ecdsa(&message, &recoverable_signatures[0][0]).expect("Error Derving Public Key");
+		// let pk1 = ctx.recover_ecdsa(&message, &recoverable_signatures[0][1]).expect("Error Derving Public Key");
+		// println!("pk0 = {}", pk0);
+		// println!("pk1 = {}", pk1);
+
+		// let bpk1 = bitcoin::PublicKey::new(pk1);
+		// //let scpk1 = bitcoin::util::address::Address::p2pkh(&bpk1, Network::Bitcoin).script_pubkey();
+		// let scpk1 = bitcoin::util::address::Address::p2wpkh(&bpk1, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		// if scpk1 == script_pubkey {
+		// 	println!("pk1");
+		// }
+
+		// let bpk0 = bitcoin::PublicKey::new(pk0);
+		// let scpk0 = bitcoin::util::address::Address::p2wpkh(&bpk0, Network::Bitcoin).expect("Could Not Get Address").script_pubkey();
+		// if scpk0 == script_pubkey {
+		// 	println!("pk0");
+		// }
 
 	
 	println!("transaction == trans = {}", transaction == trans);
 	if transaction != trans {
+		println!("transaction.input == trans.input = {}", transaction.input == trans.input);
+		println!("transaction.output == trans.output = {}", transaction.output == trans.output);
+		println!("transaction.version == trans.version = {}", transaction.version == trans.version);
+		println!("transaction.lock_time == trans.lock_time = {}", transaction.lock_time == trans.lock_time);
 		panic!("Could not Compress Transaction");
 	}
 	Ok("done".to_string())
@@ -615,17 +726,39 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 	// limit = 2^16
 	let limit = u32::pow(2, 16);
 
-	//If the Lock time is zero we can repersent that as a single bit(Otherwise half compress it)
-	let lock_time_str = match transaction.lock_time {
-		0 => "0",
-		_ => "1"
+	let scriptt = &transaction.input[0].script_sig;
+	let witnesst = &transaction.input[0].witness;
+	let first_input_type = match get_input_type(scriptt, &witnesst) {
+		Ok(is) => is,
+		Err(err) => return Err(err.to_string())
 	};
 
-	//Assemble Control Bit v = version, l = lock_time (vvl00000)
+	//TODO: Cannot use for staticts due to unloaded wallet
+	//let coinbase_str = match rpc.get_transaction(&transaction.input[0].previous_output.txid, Some(true)) {
+	//	Ok(blob) => {
+	//	    blob.info TODO:IS NEW COINS?
+	//	},
+	//	Err(error) => return Err(error.to_string())
+	//};
+
+	let coinbase_str = match transaction.input[0].previous_output.vout {
+		4294967295 => "1",
+		_ => "0"
+	};
+
+	//If the Lock time is zero we can repersent that as a single bit(Otherwise half compress it)
+	let lock_time_str = match transaction.lock_time {
+		0 => "00",
+		_ if (first_input_type != "00") && (coinbase_str == "0") => "11",
+		_ => "10",
+	};
+
+	//Assemble Control Bit v = version, l = lock_time, c = coinbase (vvllc000)
 	let mut control_str = String::new();
 	control_str += version_str;
 	control_str += lock_time_str;
-	control_str += "00000";
+	//control_str += coinbase_str;
+	control_str += "0000";
 
 	//Push control bit
 	let control: u8 = u8::from_str_radix(&control_str, 2).unwrap();
@@ -640,11 +773,14 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 	}
 
 	//If lock_time was uncompressed Push Lock_Time
-	if lock_time_str == "1" {
+	if lock_time_str == "11" {
 		let second_lock = (transaction.lock_time % limit) as u16;
 		let lock_time = u16_to_2_bytes(second_lock);
-		println!("Lock Time = {}", hex::encode(u16_to_2_bytes(second_lock)));
+		println!("Lock Time S = {}", hex::encode(u16_to_2_bytes(second_lock)));
 		compressed_transaction.extend(lock_time);
+	} else if lock_time_str == "10" {
+		println!("Lock Time = {}", transaction.lock_time);
+		compressed_transaction.extend(to_varint(transaction.lock_time as i64));
 	}
 
 	//Convert the number of inputs to binary "00" is uncompressed varint
@@ -731,11 +867,15 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 
 	
 	fn get_input_type(script: &Script, witness: &Witness) -> Result<String, String> {
-		if script.as_bytes().len() == 0 {
-			if witness.len() == 1 {
-				return Ok("11".to_string())
-			} else {
-				return Ok("10".to_string())
+		if (script.as_bytes().len() == 0) && (witness.len() == 1) || (witness.len() == 2) {
+			match secp256k1::ecdsa::Signature::from_der(&witness.to_vec()[0]) {
+				Ok(_) => return Ok("10".to_string()),
+				Err(_) => {
+					match secp256k1::ecdsa::Signature::from_der_lax(&witness.to_vec()[0]) {
+						Ok(_) => return Ok("11".to_string()),
+						Err(_) => return Ok("00".to_string())
+					}
+				}
 			}
 		} else {
 			match get_script_sig(script) {
@@ -760,7 +900,7 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 	let mut input_identical = true;
 	for i in 0..transaction.input.len() {
 		let script = &transaction.input[i].script_sig;
-		let witness = &transaction.input[0].witness;
+		let witness = &transaction.input[i].witness;
 		let ist = match get_input_type(script, &witness) {
 			Ok(is) => is,
 			Err(err) => return Err(err.to_string())
@@ -776,9 +916,9 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 	input_str += input_count;
 	input_str += &sequence_str;
 	if input_type_str == "00" {
-		input_str += "1";
-	} else {
 		input_str += "0";
+	} else {
+		input_str += "1";
 	}
 	if input_identical {
 		input_str += "1";
@@ -928,7 +1068,18 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 				compressed_transaction.extend(&compact_signature);
 				println!("01 Sig = {}", hex::encode(&compact_signature));
 			},
-			"10" | "11" => {
+			"10" => {
+				//Segwit uses witnesses the first witness is always the script_sig
+				let signature = match secp256k1::ecdsa::Signature::from_der(&transaction.input[i].witness.to_vec()[0]) {
+					Ok(ss) => ss,
+					Err(err) => return Err(err.to_string())
+				};
+				let compact_signature = signature.serialize_compact().to_vec();
+
+				compressed_transaction.extend(&compact_signature);
+				println!("10 Sig = {}", hex::encode(&compact_signature));
+			},
+			"11" => {
 				//Segwit uses witnesses the first witness is always the script_sig
 				let signature = match secp256k1::ecdsa::Signature::from_der_lax(&transaction.input[i].witness.to_vec()[0]) {
 					Ok(ss) => ss,
@@ -937,8 +1088,8 @@ pub fn compress_transaction(tx: &String, rpc: &bitcoincore_rpc::Client) -> Resul
 				let compact_signature = signature.serialize_compact().to_vec();
 
 				compressed_transaction.extend(&compact_signature);
-				println!("10 | 11 Sig = {}", hex::encode(&compact_signature));
-			}
+				println!("11 Sig = {}", hex::encode(&compact_signature));
+			},
 			_ => {
 				//Custom Signature
 				compressed_transaction.push(transaction.input[i].script_sig.len() as u8);
