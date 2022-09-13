@@ -15,6 +15,7 @@ jpeg-encoder = "0.5.1"
 bitcoin = { version = "0.28.1", features = ["bitcoinconsensus"] }
 secp256k1 = { version = "0.22.0", features = ["bitcoin_hashes"] }
 bitcoincore-rpc = "0.15.0"
+bitcoincore-rpc-json = "0.15.0"
 rusty-leveldb = "1.0.3"
 rs-leveldb = "0.1.5"
 hex = "0.4.1"
