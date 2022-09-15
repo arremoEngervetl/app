@@ -695,15 +695,20 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 			let sig_hash = shc.segwit_signature_hash(i, &scriptCode, txoutvalue.as_sat(), sig_type).expect("Could not get sighash");
 			messages.push(secp256k1::Message::from_slice(&sig_hash).expect("Could Not Get Message From SigHash"));
 		}
+
+		let complete_sig = secp256k1::ecdsa::Signature::from_der_lax(&trans.input[0].witness.to_vec()[0]).expect("cannot get sig");
 		
 		let mut recoverable_sigs = Vec::new();
 		for x in 0..4 {
 			println!("x = {}", x);
-			match secp256k1::ecdsa::RecoverableSignature::from_compact(recoverable_signatures[0], secp256k1::ecdsa::RecoveryId::from_i32(x as i32).expect("Could not create RecoveryId")) {
-				Ok(sig) => recoverable_sigs.push(sig),
+			let signature = match secp256k1::ecdsa::RecoverableSignature::from_compact(recoverable_signatures[0], secp256k1::ecdsa::RecoveryId::from_i32(x as i32).expect("Could not create RecoveryId")) {
+				Ok(sig) => sig,
 				Err(err) => panic!("ERROR: {}", err) 
-			}
+			};
+			println!("test = {}", signature.to_standard());
+			recoverable_sigs.push(signature);
 		}
+		let ctx = Secp256k1::new();
 
 		let mut public_keys = Vec::new();
 		for message in &messages {
@@ -711,12 +716,9 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 			let mut pks = Vec::new();
 			for x in 0..recoverable_sigs.len() {
 				let sig = recoverable_sigs[x];
-				let standard_sig = sig.to_standard();
-				println!("sig = {}", standard_sig);
-				let ctx = Secp256k1::new();
 				match ctx.recover_ecdsa(&message, &sig) {
-					Ok(pk) => pks.push(pk),
-					Err(err) => panic!("error: {}", err)
+					Ok(pk) => pks.push((message,pk)),
+					Err(_) => {}
 				};
 			}
 			public_keys.push(pks);
@@ -736,8 +738,12 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 			//(bitcoin::util::address::Address::p2pk(&bpk0, Network::Bitcoin).script_pubkey(), bitcoin::util::address::Address::p2pk(&bpk1, Network::Bitcoin).script_pubkey())
 		} else if script_pubkey.is_v0_p2wpkh() {
 			println!("p2wpkh");
-			for message_pubkeys in public_keys {
-				for pubkey in message_pubkeys {
+			for a in 0..public_keys.len() {
+				for b in 0..public_keys[a].len() {
+					let pubkey = public_keys[a][b].1;
+					let message = public_keys[a][b].0;
+					println!("pk = {}", pubkey);
+					assert!(ctx.verify_ecdsa(&message, &complete_sig, &pubkey).is_ok());
 					let bpk = bitcoin::PublicKey::new(pubkey);
 					let scpk = bitcoin::util::address::Address::p2wpkh(&bpk, Network::Bitcoin).expect("Get Address").script_pubkey();
 					println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
