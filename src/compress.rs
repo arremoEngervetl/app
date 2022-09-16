@@ -1302,3 +1302,110 @@ pub fn valid_transaction(tx: String) -> String {
 		}
 	};
 } 
+
+
+pub fn testscp(tx: &String, rpc: &bitcoincore_rpc::Client) -> Result<String, String> {
+	//Transaction from hex to bytes
+	let bytes = match Vec::from_hex(&tx) {
+		Ok(bytes) => bytes,
+		Err(error) => {
+			println!("error = {}", error);
+			return Err(error.to_string())
+		}
+	};
+
+	//Deserialize Transaction
+	let transaction = match Transaction::deserialize(&bytes) {
+		Ok(transaction) => transaction,
+		Err(error) => {
+			return Err(error.to_string())
+		}
+	};
+
+	let signature = match secp256k1::ecdsa::Signature::from_der_lax(&transaction.input[0].witness.to_vec()[0]) {
+		Ok(ss) => ss,
+		Err(err) => return Err(err.to_string())
+	};
+	let compact_signature = signature.serialize_compact().to_vec();
+
+
+	println!("D----------------------------------");
+
+	let (script_pubkey, txoutvalue) = match rpc.get_tx_out(&transaction.input[0].previous_output.txid, transaction.input[0].previous_output.vout, Some(false)) {
+		Ok(r) => match r {
+			Some(rs) => {
+				let scpk = match rs.script_pub_key.script() {
+					Ok(pk) => pk,
+					Err(err) => {
+						println!("error = {}", err);
+						return Err(err.to_string());
+					}
+				};
+				(scpk, rs.value)
+			},
+			None => {
+				println!("error = {}", "Cannot find Tx Out");
+				return Ok("Cannot find TX Out(not unspent)".to_string());
+			}
+		},
+		Err(err) => {
+			println!("error = {}", err);
+			return Err(err.to_string());
+		}
+	};
+	println!("sc = {}", script_pubkey);
+
+	//SCRIPT CODE
+	let mut script_code_vec = Vec::from([0x19, 0x76, 0xa9, 0x14]);
+	let pubkey = &script_pubkey.as_bytes()[2..];
+	script_code_vec.extend(pubkey);
+	script_code_vec.push(0x88);
+	script_code_vec.push(0xac);
+	let script_code: bitcoin::Script = script_code_vec.into();
+	println!("Script Code = {}", script_code);
+	//SCRIPT CODE
+
+	let mut hash_type = bitcoin::blockdata::transaction::EcdsaSighashType::All;
+	let mut shc = bitcoin::util::sighash::SighashCache::new(&transaction);
+	let sig_hash = shc.segwit_signature_hash(0, &script_code, txoutvalue.as_sat(), hash_type).expect("Could not get sighash");
+	let message = secp256k1::Message::from_slice(&sig_hash).expect("Could Not Get Message From SigHash");
+	let complete_sig = secp256k1::ecdsa::Signature::from_der_lax(&transaction.input[0].witness.to_vec()[0]).expect("cannot get sig");
+	
+	let mut recoverable_sigs = Vec::new();
+	for x in 0..4 {
+		println!("x = {}", x);
+		let signature = match secp256k1::ecdsa::RecoverableSignature::from_compact(&compact_signature, secp256k1::ecdsa::RecoveryId::from_i32(x as i32).expect("Could not create RecoveryId")) {
+			Ok(sig) => sig,
+			Err(err) => panic!("ERROR: {}", err) 
+		};
+		println!("test = {}", signature.to_standard());
+		assert_eq!(signature.to_standard(), complete_sig);
+		recoverable_sigs.push(signature);
+	}
+	let ctx = Secp256k1::new();
+
+	let mut public_keys = Vec::new();
+	for x in 0..recoverable_sigs.len() {
+		let sig = recoverable_sigs[x];
+		match ctx.recover_ecdsa(&message, &sig) {
+			Ok(pk) => public_keys.push((message,pk)),
+			Err(_) => {}
+		};
+	}
+	if script_pubkey.is_v0_p2wpkh() {
+		println!("p2wpkh");
+		for b in 0..public_keys.len() {
+			let pubkey = public_keys[b].1;
+			let message = public_keys[b].0;
+			assert!(ctx.verify_ecdsa(&message, &complete_sig, &pubkey).is_ok());
+
+			let bpk = bitcoin::PublicKey::new(pubkey);
+			let scpk = bitcoin::util::address::Address::p2wpkh(&bpk, Network::Bitcoin).expect("Get Address").script_pubkey();
+			println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
+			if scpk == script_pubkey {
+				panic!("FOUND!!");
+			}
+		}
+	}
+	return Ok("Completed".to_string())
+}

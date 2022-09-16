@@ -15,6 +15,7 @@ use trellis::stego;
 mod compress;
 use compress::valid_transaction;
 use compress::compress_transaction;
+use compress::testscp;
 
 #[derive(Default)]
 struct App {
@@ -114,7 +115,8 @@ impl Sandbox for App {
                 //if self.error == "" {
                     //self.step += 1;
                 //}
-                let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
+                // let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
+                testscp(&self.text, &rpc).expect("DID NOT WORK");
             }
             Message::ClearPressed => {
                 self.error = "".to_string();
