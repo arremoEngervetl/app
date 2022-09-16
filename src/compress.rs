@@ -1327,6 +1327,11 @@ pub fn testscp(tx: &String, rpc: &bitcoincore_rpc::Client) -> Result<String, Str
 		Err(err) => return Err(err.to_string())
 	};
 
+	let original_public_key = match secp256k1::PublicKey::from_slice(&transaction.input[0].witness.to_vec()[1]) {
+		Ok(pk) => pk,
+		Err(err) => return Err(("Error Dervinig Pubkey".to_owned()+&err.to_string()).to_string())
+	};
+
 	let compact_signature = original_signature.serialize_compact().to_vec();
 
 
@@ -1389,7 +1394,7 @@ pub fn testscp(tx: &String, rpc: &bitcoincore_rpc::Client) -> Result<String, Str
 	};
 
 	assert!(script_pubkey.is_v0_p2wpkh());
-	assert!(ctx.verify_ecdsa(&message, &original_signature, &public_key).is_ok());
+	assert!(ctx.verify_ecdsa(&message, &original_signature, &original_public_key).is_ok());
 
 	let bpk = bitcoin::PublicKey::new(public_key);
 	let scpk = bitcoin::util::address::Address::p2wpkh(&bpk, Network::Bitcoin).expect("Get Address").script_pubkey();
