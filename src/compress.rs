@@ -139,7 +139,7 @@ fn get_script_sig(script: &Script) -> Result<Option<Vec<u8>>, String> {
 fn get_input_type(script: &Script, witness: &Witness, txin: &TxIn, rpc: &bitcoincore_rpc::Client) -> Result<String, String> {
 	if txin.previous_output.vout == 4294967295 {
 		//Custom Script(Can't compress a coinbase transaction)
-		return Ok("0".to_string())
+		return Ok("00".to_string())
 	};
 	let script_pubkey = match rpc.get_tx_out(&txin.previous_output.txid, txin.previous_output.vout, Some(false)) {
 		Ok(r) => match r {
@@ -153,38 +153,24 @@ fn get_input_type(script: &Script, witness: &Witness, txin: &TxIn, rpc: &bitcoin
 	};
 	if (script_pubkey.is_p2sh() || script_pubkey.is_v0_p2wsh()) && !script_pubkey.is_p2pkh() && !script_pubkey.is_p2pk() && !script_pubkey.is_v0_p2wpkh() && !script_pubkey.is_v1_p2tr() {
 		//Custom Script(Can't compress script hashes)
-		return Ok("0".to_string())
+		return Ok("00".to_string())
 	}
-	println!("script = {}", hex::encode(&witness.to_vec()[0]));
-	println!("wit = {}", witness.to_vec().len());
 
 	match bitcoin::EcdsaSig::from_slice(&witness.to_vec()[0]) {
-		Ok(_) => return Ok("1".to_string()),
+		Ok(_) => return Ok("10".to_string()),
 		Err(_) => {}
 	};
 	match bitcoin::SchnorrSig::from_slice(&witness.to_vec()[0]) {
-		Ok(_) => return Ok("1".to_string()),
+		Ok(_) => return Ok("11".to_string()),
 		Err(_) => {}
 	};
 	match get_script_sig(script) {
 		//Legacy script
-		Ok(Some(_)) => return Ok("1".to_string()),
+		Ok(Some(_)) => return Ok("01".to_string()),
 		//Custom Script
-		Ok(None) => return Ok("0".to_string()),
+		Ok(None) => return Ok("00".to_string()),
 		Err(err) => return Err(err)
 	}
-	// if script.as_bytes().is_empty() && (witness.len() == 1) || (witness.len() == 2) {
-	// 	match secp256k1::ecdsa::Signature::from_der(&witness.to_vec()[0]) {
-	// 		Ok(_) => Ok("10".to_string()),
-	// 		Err(_) => {
-	// 			match secp256k1::ecdsa::Signature::from_der_lax(&witness.to_vec()[0]) {
-	// 				Ok(_) => Ok("11".to_string()),
-	// 				Err(_) => Ok("00".to_string())
-	// 			}
-	// 		}
-	// 	}
-	// } else {
-	
 }
 
 fn get_witness_script(trans: &Transaction,  rpc: &bitcoincore_rpc::Client, recoverable_signatures: &Vec<&[u8]>, i: usize, mut find_lock_time: bool, outputs: &Vec<TxOut>) -> Result<(Script, Witness, PackedLockTime), String> {
@@ -948,7 +934,11 @@ pub fn compress_transaction(tx: &str, rpc: &bitcoincore_rpc::Client) -> Result<S
 	let mut input_str = String::new();
 	input_str += input_count;
 	input_str += &sequence_str;
-	input_str += &input_type_str;
+	if input_type_str != "00" {
+		input_str += "1";
+	} else {
+		input_str += "0";
+	}
 	if input_identical {
 		input_str += "1";
 	} else {
@@ -1099,8 +1089,8 @@ pub fn compress_transaction(tx: &str, rpc: &bitcoincore_rpc::Client) -> Result<S
 			},
 			"10" => {
 				//Segwit uses witnesses the first witness is always the script_sig
-				let signature = match secp256k1::ecdsa::Signature::from_der(&transaction.input[i].witness.to_vec()[0]) {
-					Ok(ss) => ss,
+				let signature = match bitcoin::EcdsaSig::from_slice(&transaction.input[i].witness.to_vec()[0]) {
+					Ok(ss) => ss.sig,
 					Err(err) => return Err(err.to_string())
 				};
 				let compact_signature = signature.serialize_compact().to_vec();
@@ -1110,16 +1100,11 @@ pub fn compress_transaction(tx: &str, rpc: &bitcoincore_rpc::Client) -> Result<S
 				
 			},
 			"11" => {
-				//Segwit uses witnesses the first witness is always the script_sig
-				let signature = match secp256k1::ecdsa::Signature::from_der_lax(&transaction.input[i].witness.to_vec()[0]) {
-					Ok(ss) => ss,
-					Err(err) => return Err(err.to_string())
-				};
-				println!("ss = {}", signature);
-				let compact_signature = signature.serialize_compact().to_vec();
+				//schnorr(tr) uses witnesses the first witness is always the script_sig
+				let compact_signature = &transaction.input[i].witness.to_vec()[0];
 
-				compressed_transaction.extend(&compact_signature);
-				println!("11 Sig = {}", hex::encode(&compact_signature));
+				compressed_transaction.extend(compact_signature);
+				println!("11 Sig = {}", hex::encode(compact_signature));
 			},
 			_ => {
 				//Custom Signature
