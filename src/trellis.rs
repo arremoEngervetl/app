@@ -95,7 +95,7 @@ pub fn stego(filename: String, _tx: String) -> String {
 		r_byte = filler+&r_byte
 	}
 	r_byte.pop();
-	r_byte = r_byte+&"1".to_string();
+	r_byte += "1";
 	// print!("{}-{}={}, ", i, ii, u8::from_str_radix(&r_byte, 2).unwrap());
 	let new_pixel = Rgb([u8::from_str_radix(&r_byte, 2).unwrap(), pixel[1], pixel[2]]);
 	rgb_image.put_pixel(i, ii, new_pixel);
@@ -147,16 +147,16 @@ pub fn stego(filename: String, _tx: String) -> String {
 	}
 	println!(";");
 	print!("cover_object: ");
-	for i in 0..cover_object.len() {
-		print!("{}, ", cover_object[i]);
+	for co in &cover_object {
+		print!("{}, ", co);
 	}
 	println!(";");
 	print!("stego_ob    : ");
-	for i in 0..stego_ob.len() {
-		print!("{}, ", stego_ob[i]);
+	for stob in &stego_ob {
+		print!("{}, ", stob);
 	}
 	println!(";");
 	assert!(cover_object == stego_ob);
 
-	return string;
+	string
 }

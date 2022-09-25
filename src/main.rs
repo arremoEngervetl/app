@@ -15,7 +15,6 @@ use trellis::stego;
 mod compress;
 use compress::valid_transaction;
 use compress::compress_transaction;
-use compress::testscp;
 
 #[derive(Default)]
 struct App {
@@ -89,7 +88,7 @@ impl Sandbox for App {
                               Auth::UserPass(self.rpcuser.clone(),
                                              self.rpcpass.clone())).unwrap();
                
-                let bc = rpc.get_block_count().expect("Could Not Get Block Count");
+                //let bc = rpc.get_block_count().expect("Could Not Get Block Count");
                 // 'L: for y in 0..100000 {
                 //     let i = bc - y;
                 //     println!("B-----------------------------------------------------I = {}", i);
@@ -115,8 +114,13 @@ impl Sandbox for App {
                 //if self.error == "" {
                     //self.step += 1;
                 //}
-                // let ctx = compress_transaction(&self.text, &rpc).expect("Could Not Compress Transaction");
-                testscp(&self.text, &rpc).expect("DID NOT WORK");
+                //p2wpkh
+                let txr = "02000000000101f85cbf6087f5fa6cfbe5260e74d06e06f30a675af7a94100b572e71016f1d6370100000000feffffff01007083d05d06000016001490a5965db12afb78ef4eab7c3322146550d8bd8d02473044022037dd156f0f4d6626470eb448e4eda9f5fab033553872aa9ce9e4cad23750d628022025f0a010f63262621d516d5e91a5c2e4da7e43c30586e01a1f4961b26c406655012102cea657661db1991d09184b043a69c17a38415abb871f7676055183f9ab2c0295b4790800".to_string();
+                //TR
+                //let txr = "02000000000101772251c4eb6c0fabdf689ca9703cdd107c6646b98f69d2fece5ef8e65112e06b0100000000feffffff01007083d05d060000225120ca1e131a2d01740a251d8bd0167bb032999b124c40ea23a1f87b9f5d713f97170140eb49c37a62ad556d55a42e560ef1a651ac32f5705ed06ce5185b63881eda4b269cb82338fb2b72ba7d35eb69659e440a0b4455d9c6cb6e5fd6de78c4ea0dd82cb4790800".to_string();
+                let _ctx = compress_transaction(&txr, &rpc).expect("Could Not Compress Transaction");
+                //testscp(&self.text, &rpc).expect("DID NOT WORK");
+                //createrawtransaction '[{"txid":"37d6f11610e772b50041a9f75a670af3066ed0740e26e5fb6cfaf58760bf5cf8","vout":1}]' '[{"bc1qjzjevhd39tah3m6w4d7rxgs5v4gd30vd26gttu": 70000}]'
             }
             Message::ClearPressed => {
                 self.error = "".to_string();
@@ -148,13 +152,13 @@ impl Sandbox for App {
         .spacing(20)
         .padding(20)
         .max_width(600);
-        if self.error == "" {
+        if self.error.is_empty() {
             if self.step == 0 { 
                 content = content
                     .push(
                         Row::new().push(
                             Text::new(
-                                format!("Get Started")
+                                "Get Started".to_string()
                             ).size(50)
                         )
                     )
@@ -169,7 +173,7 @@ impl Sandbox for App {
                     .push(
                         Row::new().push(
                             Text::new(
-                                format!("Confirm bitcoin core is running and up to date")
+                                "Confirm bitcoin core is running and up to date".to_string()
                             ).size(40)
                         )
                     ).push(
@@ -180,12 +184,12 @@ impl Sandbox for App {
                     );
             } else if self.step == 2 {
                 self.rpcport = "8332".to_string();
-                let mut file = File::open(dot_bitcoin.to_owned()+"/bitcoin.conf").expect("can't open bitcoin.conf located {}");
+                let mut file = File::open(dot_bitcoin+"/bitcoin.conf").expect("can't open bitcoin.conf located {}");
                 let mut contents = String::new();
                 file.read_to_string(&mut contents).expect("unable to read file contents");
-                let lines = contents.split("\n");
+                let lines = contents.split('\n');
                 for line in lines {
-                    let property = line.split("=");
+                    let property = line.split('=');
                     let property_vec = property.collect::<Vec<&str>>();
                     if property_vec[0] == "rpcuser" {
                         self.rpcuser = property_vec[1].to_string();
@@ -195,6 +199,9 @@ impl Sandbox for App {
                         self.rpcport = property_vec[1].to_string();
                     }
                 }
+                println!("rpcuser = {}",self.rpcuser);
+                println!("rpcpass = {}", self.rpcpass);
+                println!("rpcport = {}", self.rpcport);
                 let rpc = Client::new(&("http://localhost:".to_owned()+&self.rpcport),
                               Auth::UserPass(self.rpcuser.clone(),
                                              self.rpcpass.clone())).unwrap();
@@ -212,7 +219,7 @@ impl Sandbox for App {
                 content = content.push(
                     Row::new().push(
                         Text::new(
-                            format!("Wait for bitcoin core to update")
+                            "Wait for bitcoin core to update".to_string()
                         ).size(40)
                     )
                 ).push(
@@ -253,13 +260,13 @@ impl Sandbox for App {
                     .push(
                         Row::new().push(
                             Text::new(
-                                format!("Paste in a transaction id")
+                                "Paste in a transaction id".to_string()
                             ).size(50)
                         )
                     ).push(row);
 
                 let valid = valid_transaction(self.text.clone());
-                if valid == "" {
+                if valid.is_empty() {
                     content = content.push(
                         Row::new().push(
                             compress_button
@@ -269,7 +276,7 @@ impl Sandbox for App {
                     content = content.push(
                         Row::new().push(
                             Text::new(
-                                format!("{}", valid)
+                                valid
                             ).style(Color::from([1.0, 0.0, 0.0]))
                         )
                     )
@@ -281,7 +288,7 @@ impl Sandbox for App {
                     .push(
                         Row::new().push(
                             Text::new(
-                                format!("Choose a cover Image")
+                                "Choose a cover Image".to_string()
                             ).size(50)
                         )
                     )
@@ -299,7 +306,7 @@ impl Sandbox for App {
                             .center_x()
                             .center_y()
                     );
-                if self.file != "" {
+                if !self.file.is_empty() {
                     content = content.push(
                         Button::new(&mut self.next_button, Text::new("Next"))
                             .on_press(Message::NextPressed)
@@ -312,7 +319,7 @@ impl Sandbox for App {
                     .push(
                         Row::new().push(
                             Text::new(
-                                format!("Stego the image and txid")
+                                "Stego the image and txid".to_string()
                             ).size(50)
                         )
                     )
@@ -327,14 +334,14 @@ impl Sandbox for App {
                     Text::new(
                         format!("Could not find step {}", self.step)
                     ).size(12)
-                ).into();
+                );
             }
         }
-        if self.error != "" {
+        if !self.error.is_empty() {
             content = Column::new()
                 .push(
                     Text::new(
-                            format!("{}", self.error)
+                            self.error.to_string()
                         ).size(25)
                 )
                 .push(
