@@ -1,20 +1,36 @@
+extern crate app;
+extern crate bitcoincore_rpc;
+
 use iced::button::{self, Button};
 use iced::{Color, Alignment, ProgressBar, Column, Theme, Row, Element, Sandbox, Settings, Text, Image, Container, Length};
 use iced::widget::text_input::{self, TextInput};
 use native_dialog::FileDialog;
 use std::fs::File;
 use std::io::Read;
-
-
-extern crate bitcoincore_rpc;
+use std::process;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
+use app::trellis::stego;
+use app::compress::valid_transaction;
+use app::compress::compress_transaction;
+use app::error::Error;
 
-mod trellis;
-use trellis::stego;
+fn pretty_unwrap<T>(msg: &str, res: Result<T, Error>) -> T {
+    match res {
+        Ok(r) => r,
+        Err(error) => {
+            print!("{}: ", msg);
+            match error {
+                Error::CompressingTransactionError => {
+                    println!("Could not Compress Transaction: {}", error);
+                },
+                // Otherwise just print the error
+                e => println!("{}", e)
+            }
+            process::exit(1);
+        }
+    }
+}
 
-mod compress;
-use compress::valid_transaction;
-use compress::compress_transaction;
 
 #[derive(Default)]
 struct App {
@@ -118,7 +134,7 @@ impl Sandbox for App {
                 let txr = "02000000000101f85cbf6087f5fa6cfbe5260e74d06e06f30a675af7a94100b572e71016f1d6370100000000feffffff01007083d05d06000016001490a5965db12afb78ef4eab7c3322146550d8bd8d02473044022037dd156f0f4d6626470eb448e4eda9f5fab033553872aa9ce9e4cad23750d628022025f0a010f63262621d516d5e91a5c2e4da7e43c30586e01a1f4961b26c406655012102cea657661db1991d09184b043a69c17a38415abb871f7676055183f9ab2c0295b4790800".to_string();
                 //TR
                 //let txr = "02000000000101772251c4eb6c0fabdf689ca9703cdd107c6646b98f69d2fece5ef8e65112e06b0100000000feffffff01007083d05d060000225120ca1e131a2d01740a251d8bd0167bb032999b124c40ea23a1f87b9f5d713f97170140eb49c37a62ad556d55a42e560ef1a651ac32f5705ed06ce5185b63881eda4b269cb82338fb2b72ba7d35eb69659e440a0b4455d9c6cb6e5fd6de78c4ea0dd82cb4790800".to_string();
-                let _ctx = compress_transaction(&txr, &rpc).expect("Could Not Compress Transaction");
+                let _ctx = pretty_unwrap("Compressing Transaction", compress_transaction(&txr, &rpc));
                 //testscp(&self.text, &rpc).expect("DID NOT WORK");
                 //createrawtransaction '[{"txid":"37d6f11610e772b50041a9f75a670af3066ed0740e26e5fb6cfaf58760bf5cf8","vout":1}]' '[{"bc1qjzjevhd39tah3m6w4d7rxgs5v4gd30vd26gttu": 70000}]'
             }
