@@ -13,7 +13,7 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-iced = { git="https://github.com/iced-rs/iced.git", branch="master", features = ["image"]}
+iced = { git="https://github.com/iced-rs/iced.git", branch="master", features = ["image"], optional = true}
 native-dialog = "0.6.3"
 rand = "0.8.5"
 image = { package = "image", version = "0.24.2", features = ["jpeg"] }
@@ -27,3 +27,6 @@ rusty-leveldb = "1.0.3"
 rs-leveldb = "0.1.5"
 hex = "0.4.1"
 trie-rs = "0.1.1"
+
+[features]
+gui = ["dep:iced"]

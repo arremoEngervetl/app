@@ -1,7 +1,9 @@
 use secp256k1;
 use bitcoin;
-
+#[cfg(feature="gui")]
+use iced;
 use std::{error, fmt};
+use std::convert::Infallible;
 #[derive(Debug)]
 pub enum Error {
     /// Error from libsecp
@@ -13,6 +15,9 @@ pub enum Error {
     BitcoinRpc(bitcoincore_rpc::Error),
     EcdsaSigError(bitcoin::EcdsaSigError),
     BUS(bitcoin::util::sighash::Error),
+    FromError(Infallible),
+    #[cfg(feature="gui")]
+    Iced(iced::Error),
     NoTxOut,
     InvalidOutputCompressionCode,
     UnparsableCompression,
@@ -67,30 +72,29 @@ impl From<bitcoin::util::sighash::Error> for Error {
     }
 }
 
+impl From<Infallible> for Error {
+    fn from(e: Infallible) -> Error {
+        Error::FromError(e)
+    }
+}
+
+#[cfg(feature="gui")]
+impl From<iced::Error> for Error {
+    fn from(e: iced::Error) -> Error {
+        Error::Iced(e)
+    }
+}
+
 
 impl error::Error for Error {
     fn cause(&self) -> Option<&dyn error::Error> {
-        match *self {
-            _ => None
-        }
+        // match *self {
+        //     _ => None
+        // }
+        None
     }
 
-    fn description(&self) -> &str {
-        match *self {
-            Error::Secp(ref e) => error::Error::description(e),
-            Error::Bitcoin(ref e) => error::Error::description(e),
-            Error::Hex(ref e) => error::Error::description(e),
-            Error::BCE(ref e) => error::Error::description(e),
-            Error::BBS(ref e) => error::Error::description(e),
-            Error::BitcoinRpc(ref e) => error::Error::description(e),
-            Error::EcdsaSigError(ref e) => error::Error::description(e),
-            Error::BUS(ref e) => error::Error::description(e),
-            Error::NoTxOut => "No TxOut Found, Either Spent or Coinbase Transaction",
-            Error::InvalidOutputCompressionCode => "Invalid Output Compression Code, Bad String Returned",
-            Error::UnparsableCompression => "Unparsable Compression, Faild or Corupted Compression",
-            Error::CompressingTransactionError => "Unable To Compress Transaction"
-        }
-    }
+   
 }
 
 impl fmt::Display for Error {
@@ -104,7 +108,13 @@ impl fmt::Display for Error {
             Error::BitcoinRpc(ref e) => fmt::Display::fmt(e, f),
             Error::EcdsaSigError(ref e) => fmt::Display::fmt(e, f),
             Error::BUS(ref e) => fmt::Display::fmt(e, f),
-            _ => f.write_str(&self.to_string())
+            Error::FromError(ref e) => fmt::Display::fmt(e, f),
+            #[cfg(feature="gui")]
+            Error::Iced(ref e) => fmt::Display::fmt(e, f),
+            Error::NoTxOut => f.write_str("No TxOut Found, Either Spent or Coinbase Transaction"),
+            Error::InvalidOutputCompressionCode => f.write_str("Invalid Output Compression Code, Bad String Returned"),
+            Error::UnparsableCompression => f.write_str("Unparsable Compression, Faild or Corupted Compression"),
+            Error::CompressingTransactionError => f.write_str("Unable To Compress Transaction")
         }
     }
 }
