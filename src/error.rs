@@ -4,6 +4,7 @@ use bitcoin;
 use iced;
 use std::{error, fmt};
 use std::convert::Infallible;
+use bitcoin::SchnorrSigError;
 #[derive(Debug)]
 pub enum Error {
     /// Error from libsecp
@@ -16,6 +17,8 @@ pub enum Error {
     EcdsaSigError(bitcoin::EcdsaSigError),
     BUS(bitcoin::util::sighash::Error),
     FromError(Infallible),
+    SchnorrSigError(SchnorrSigError),
+    BKE(bitcoin::util::key::Error),
     #[cfg(feature="gui")]
     Iced(iced::Error),
     NoTxOut,
@@ -78,6 +81,18 @@ impl From<Infallible> for Error {
     }
 }
 
+impl From<SchnorrSigError> for Error {
+    fn from(e: SchnorrSigError) -> Error {
+        Error::SchnorrSigError(e)
+    }
+}
+
+impl From<bitcoin::util::key::Error> for Error {
+    fn from(e: bitcoin::util::key::Error) -> Error {
+        Error::BKE(e)
+    }
+}
+
 #[cfg(feature="gui")]
 impl From<iced::Error> for Error {
     fn from(e: iced::Error) -> Error {
@@ -108,7 +123,9 @@ impl fmt::Display for Error {
             Error::BitcoinRpc(ref e) => fmt::Display::fmt(e, f),
             Error::EcdsaSigError(ref e) => fmt::Display::fmt(e, f),
             Error::BUS(ref e) => fmt::Display::fmt(e, f),
+            Error::BKE(ref e) => fmt::Display::fmt(e, f),
             Error::FromError(ref e) => fmt::Display::fmt(e, f),
+            Error::SchnorrSigError(ref e) => fmt::Display::fmt(e, f),
             #[cfg(feature="gui")]
             Error::Iced(ref e) => fmt::Display::fmt(e, f),
             Error::NoTxOut => f.write_str("No TxOut Found, Either Spent or Coinbase Transaction"),

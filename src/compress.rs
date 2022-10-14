@@ -90,9 +90,10 @@ fn get_script_sig(script: &Script) -> Result<Option<Vec<u8>>, Error> {
 			Instruction::PushBytes(data) => {
 				if index == 0 {
 					//convert bytes to signature
-					match secp256k1::ecdsa::Signature::from_der_lax(data) {
+					match bitcoin::EcdsaSig::from_slice(data) {
 						Ok(signature) => {
-							return Ok(Some(signature.serialize_compact().to_vec()));
+							//TODO:: use just the array
+							return Ok(Some(signature.sig.serialize_compact().to_vec()));
 						},
 						Err(_) => break
 					};
@@ -197,8 +198,8 @@ fn get_input_type(script: &Script, witness: &Witness, txin: &TxIn, rpc: &bitcoin
 	}
 }
 
-fn get_witness_script(trans: &Transaction,  rpc: &bitcoincore_rpc::Client, recoverable_signatures: &[&[u8]], i: usize, mut find_lock_time: bool, outputs: &[TxOut]) -> Result<(Script, Witness, PackedLockTime), Error> {
-	let mut transaction = trans.clone();
+fn get_witness_script(transa: &Transaction,  rpc: &bitcoincore_rpc::Client, recoverable_signatures: &[&[u8]], i: usize, mut find_lock_time: bool, trans: &Transaction) -> Result<(Script, Witness, PackedLockTime), Error> {
+	let mut transaction = transa.clone();
 	println!("First Half Finished Input = {}", i);
 	let mut result = (transaction.input[i].script_sig.clone(), transaction.input[i].witness.clone(), transaction.lock_time);
 	let script_pubkey = rpc.get_raw_transaction_info(&transaction.input[i].previous_output.txid, None)?.vout[transaction.input[i].previous_output.vout as usize].script_pub_key.script()?;
@@ -212,27 +213,54 @@ fn get_witness_script(trans: &Transaction,  rpc: &bitcoincore_rpc::Client, recov
 			return Err(Error::UnparsableCompression)
 		} else if script_pubkey.is_p2pkh() {
 			println!("p2pkh");
+			let mut sig_iter = trans.input[i].script_sig.instructions();
+			let signature = match sig_iter.next().unwrap()? {
+				Instruction::PushBytes(data) => {
+					bitcoin::EcdsaSig::from_slice(data)?.sig
+				},
+				Instruction::Op(_) => {
+					return Err(Error::UnparsableCompression)
+				}
+			};
+			let public_key = match sig_iter.next().unwrap()? {
+				Instruction::PushBytes(data) => {
+					secp256k1::PublicKey::from_slice(data)?
+				},
+				Instruction::Op(_) => {
+					return Err(Error::UnparsableCompression)
+				}
+			};
+			println!("signature = {}", signature);
+			println!("compact = {}", hex::encode(signature.serialize_compact().to_vec()));
+			println!("public_key = {}", public_key);
+			println!("recoverable_signatures[{}] = {}", i, hex::encode(recoverable_signatures[i]));
+
 			let mut recoverable_sigs = Vec::new();
 			for x in 0..4 {
 				let signature = secp256k1::ecdsa::RecoverableSignature::from_compact(recoverable_signatures[i], secp256k1::ecdsa::RecoveryId::from_i32(x as i32)?)?;
 				recoverable_sigs.push(signature);
 			}
+			println!("Recovered Signatures = {}", recoverable_sigs.len());
 			let shc = bitcoin::util::sighash::SighashCache::new(&transaction);
 			let sig_hash = shc.legacy_signature_hash(i, &script_pubkey, 0x01)?;
 			let message = secp256k1::Message::from_slice(&sig_hash).expect("Could Not Get Message From SigHash");
+			println!("message = {}", message);
 			let ctx = Secp256k1::new();
+			assert!(ctx.verify_ecdsa(&message, &signature, &public_key).is_ok());
 			let mut public_keys = Vec::new();
 			for rsig in &recoverable_sigs {
 				if let Ok(pk) = ctx.recover_ecdsa(&message, rsig) { public_keys.push((rsig,pk)) }
 			}
+			println!("Derived Pub Keys = {}", public_keys.len());
 			for pksig in &public_keys {
 				let pubkey = pksig.1;
 				let sig = pksig.0.to_standard();
 				println!("pk = {}", pubkey);
+				println!("pk == pubkey = {}", pubkey == public_key);
 				//TODO: dose this need to be true for all recoverd pubkeys or will it only work for the correct one? If so why check if pubkeys match at all after?
 				//Theory: Will always be true due to the sig being used, If using the original signature it will only work for the true pubkey
 				assert!(ctx.verify_ecdsa(&message, &sig, &pubkey).is_ok());
-				let bpk = bitcoin::PublicKey::new(pubkey);
+				let bpk = bitcoin::PublicKey::new(public_key);
 				println!("bpk = {}", bpk);
 				let scpk = bitcoin::util::address::Address::p2pkh(&bpk, Network::Bitcoin).script_pubkey();
 				println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
@@ -303,22 +331,36 @@ fn get_witness_script(trans: &Transaction,  rpc: &bitcoincore_rpc::Client, recov
 			return Err(Error::UnparsableCompression)
 		} else if script_pubkey.is_v1_p2tr() {
 			println!("p2tr");
-			let prevouts = Prevouts::All(outputs);
-			let mut shc = bitcoin::util::sighash::SighashCache::new(&transaction);
-			let sig_hash = shc.taproot_signature_hash(i, &prevouts, None, None, bitcoin::SchnorrSighashType::All).expect("Could not get sighash");
-			let message = secp256k1::Message::from_slice(&sig_hash).expect("Could Not Get Message From SigHash");
-			let signature = secp256k1::schnorr::Signature::from_slice(&trans.input[0].witness.to_vec()[0]).expect("Could not parse signature");
-			let x_only_pubkey = XOnlyPublicKey::from_slice(&script_pubkey[2..])?;
-			println!("signature = {}", signature);
-			println!("message = {}", message);
-			println!("Pubkey = {}", x_only_pubkey);
-			let ctx = Secp256k1::new();
-			assert!(ctx.verify_schnorr(&signature, &message, &x_only_pubkey).is_ok());
-			// let scpk = bitcoin::util::address::Address::p2tr(&ctx, x_only_pubkey, None, Network::Bitcoin).script_pubkey();
-			// println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
-			// if scpk == script_pubkey {
-				find_lock_time = false;
-			// }
+			let schnorr_sig = bitcoin::SchnorrSig::from_slice(recoverable_signatures[i])?;
+			let signature = schnorr_sig.sig;
+			if find_lock_time {
+				let sig_hash_type = schnorr_sig.hash_ty;
+				assert_eq!(sig_hash_type, bitcoin::SchnorrSighashType::Default);
+				let mut outputs = Vec::new();
+				for tx_in in &transaction.input {
+					let tx_out = &rpc.get_raw_transaction_info(&tx_in.previous_output.txid, None)?.vout[tx_in.previous_output.vout as usize];
+					outputs.push(TxOut {
+						value: tx_out.value.to_sat(),
+						script_pubkey: tx_out.script_pub_key.script()?
+					});
+				}
+				let prevouts = Prevouts::All(&outputs);
+				let mut shc = bitcoin::util::sighash::SighashCache::new(&transaction);
+				let sig_hash = shc.taproot_key_spend_signature_hash(i, &prevouts, sig_hash_type).expect("Could not get sighash");
+				let message = secp256k1::Message::from_slice(&sig_hash).expect("Could Not Get Message From SigHash");
+				let x_only_pubkey = XOnlyPublicKey::from_slice(&script_pubkey[2..])?;
+				println!("signature = {}", signature);
+				println!("message = {}", message);
+				println!("Pubkey = {}", x_only_pubkey);
+				let ctx = Secp256k1::new();
+				if ctx.verify_schnorr(&signature, &message, &x_only_pubkey).is_ok() {
+					find_lock_time = false;
+				}
+			} else {
+				witness.push(&signature.as_ref());
+				result.1 = witness.clone();
+			}
+			
 		} else {
 			//Custom Script
 			return Err(Error::UnparsableCompression)
@@ -691,14 +733,33 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		output: tx_outs
 	};
 
+	if transaction != trans {
+		println!("transaction.input == trans.input = {}", transaction.input == trans.input);
+		if transaction.input != trans.input {
+			for a in 0..transaction.input.len() {
+				println!("transaction.input[{}].previous_output == trans.input[{}].previous_output = {}", a, a, transaction.input[a].previous_output == trans.input[a].previous_output);
+				println!("transaction.input[{}].script_sig == trans.input[{}].script_sig = {}", a, a, transaction.input[a].script_sig == trans.input[a].script_sig);
+				println!("transaction.input[{}].sequence == trans.input[{}].sequence = {}", a, a, transaction.input[a].sequence == trans.input[a].sequence);
+				println!("transaction.input[{}].witness == trans.input[{}].witness = {}", a, a, transaction.input[a].witness == trans.input[a].witness);
+				for b in 0..transaction.input[a].witness.to_vec().len() {
+					println!("hex::encode(transaction.input[{}].witness.to_vec()[{}]) = {}", a, b, hex::encode(&transaction.input[a].witness.to_vec()[b]));
+					println!("hex::encode(trans.input[{}].witness.to_vec()[{}]) = {}", a, b, hex::encode(&trans.input[a].witness.to_vec()[b]));
+				}
+			}
+		}
+		println!("transaction.output == trans.output = {}", transaction.output == trans.output);
+		println!("transaction.version == trans.version = {}", transaction.version == trans.version);
+		println!("transaction.lock_time == trans.lock_time = {}", transaction.lock_time == trans.lock_time);
+	}
+
 	if &control[2..4] == "11" {
 		assert!(!half_finished_inputs.is_empty());
-		let (_, _, lock_time) = get_witness_script(&transaction, rpc, &recoverable_signatures, 0, true, &transaction.output)?;
+		let (_, _, lock_time) = get_witness_script(&transaction, rpc, &recoverable_signatures, 0, true, &trans)?;
 		transaction.lock_time = lock_time;
 		//half_finished_inputs.remove(0);
 	} 
 	for i in half_finished_inputs {
-		let (script_sig, witness, _) = get_witness_script(&transaction, rpc, &recoverable_signatures, i, false, &transaction.output)?;
+		let (script_sig, witness, _) = get_witness_script(&transaction, rpc, &recoverable_signatures, i, false, &trans)?;
 		transaction.input[i].script_sig = script_sig;
 		transaction.input[i].witness = witness;
 	}
@@ -998,6 +1059,7 @@ pub fn compress_transaction(tx: &str, rpc: &bitcoincore_rpc::Client) -> Result<S
 			},
 			InputScriptType::Taproot => {
 				//schnorr(tr) uses witnesses the first witness is always the script_sig
+				//TODO: deserizle and reserlize after confirming sighash type is all, fail if otherwise
 				let compact_signature = &transaction.input[i].witness.to_vec()[0];
 
 				compressed_transaction.extend(compact_signature);
