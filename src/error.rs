@@ -19,6 +19,9 @@ pub enum Error {
     FromError(Infallible),
     SchnorrSigError(SchnorrSigError),
     BKE(bitcoin::util::key::Error),
+    STDIOError(std::io::Error),
+    ImageError(image::ImageError),
+    TurboJPEGError(turbojpeg::Error),
     #[cfg(feature="gui")]
     Iced(iced::Error),
     NoTxOut,
@@ -93,6 +96,26 @@ impl From<bitcoin::util::key::Error> for Error {
     }
 }
 
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Error {
+        Error::STDIOError(e)
+    }
+}
+
+impl From<image::ImageError> for Error {
+    fn from(e: image::ImageError) -> Error {
+        Error::ImageError(e)
+    }
+}
+
+impl From<turbojpeg::Error> for Error {
+    fn from(e: turbojpeg::Error) -> Error {
+        Error::TurboJPEGError(e)
+    }
+}
+
+
+
 #[cfg(feature="gui")]
 impl From<iced::Error> for Error {
     fn from(e: iced::Error) -> Error {
@@ -126,6 +149,9 @@ impl fmt::Display for Error {
             Error::BKE(ref e) => fmt::Display::fmt(e, f),
             Error::FromError(ref e) => fmt::Display::fmt(e, f),
             Error::SchnorrSigError(ref e) => fmt::Display::fmt(e, f),
+            Error::STDIOError(ref e) => fmt::Display::fmt(e, f),
+            Error::ImageError(ref e) => fmt::Display::fmt(e, f),
+            Error::TurboJPEGError(ref e) => fmt::Display::fmt(e, f),
             #[cfg(feature="gui")]
             Error::Iced(ref e) => fmt::Display::fmt(e, f),
             Error::NoTxOut => f.write_str("No TxOut Found, Either Spent or Coinbase Transaction"),

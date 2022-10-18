@@ -262,7 +262,9 @@ fn get_witness_script(transa: &Transaction,  rpc: &bitcoincore_rpc::Client, reco
 				assert!(ctx.verify_ecdsa(&message, &sig, &pubkey).is_ok());
 				let bpk = bitcoin::PublicKey::new(public_key);
 				println!("bpk = {}", bpk);
-				let scpk = bitcoin::util::address::Address::p2pkh(&bpk, Network::Bitcoin).script_pubkey();
+				// let scpk = bitcoin::util::address::Address::p2pkh(&bpk, Network::Bitcoin).script_pubkey();
+				println!("bpkh = {}", bpk.pubkey_hash());
+				let scpk = Script::new_p2pkh(&bpk.pubkey_hash());
 				println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
 				if scpk == script_pubkey {
 					let mut script_sig_vec: Vec<u8> = Vec::new();
@@ -313,7 +315,8 @@ fn get_witness_script(transa: &Transaction,  rpc: &bitcoincore_rpc::Client, reco
 				assert!(ctx.verify_ecdsa(&message, &sig, &pubkey).is_ok());
 				let bpk = bitcoin::PublicKey::new(pubkey);
 				println!("bpk = {}", bpk);
-				let scpk = bitcoin::util::address::Address::p2wpkh(&bpk, Network::Bitcoin).expect("Get Address").script_pubkey();
+				// let scpk = bitcoin::util::address::Address::p2wpkh(&bpk, Network::Bitcoin).expect("Get Address").script_pubkey();
+				let scpk = Script::new_v0_p2wpkh(&bpk.wpubkey_hash().unwrap());
 				println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
 				if scpk == script_pubkey {
 					let mut stand_sig = sig.serialize_der().to_vec();
@@ -759,6 +762,7 @@ fn deserialize(tx_hex: &String, rpc: &bitcoincore_rpc::Client, trans: Transactio
 		//half_finished_inputs.remove(0);
 	} 
 	for i in half_finished_inputs {
+		println!("-------------------------{}", i);
 		let (script_sig, witness, _) = get_witness_script(&transaction, rpc, &recoverable_signatures, i, false, &trans)?;
 		transaction.input[i].script_sig = script_sig;
 		transaction.input[i].witness = witness;
@@ -1049,6 +1053,7 @@ pub fn compress_transaction(tx: &str, rpc: &bitcoincore_rpc::Client) -> Result<S
 				println!("01 Sig = {}", hex::encode(&compact_signature));
 			},
 			InputScriptType::Segwit => {
+				println!("ORIGINAL PUBLIC KEY = {}", hex::encode(&transaction.input[i].witness.to_vec()[1]));
 				//Segwit uses witnesses the first witness is always the script_sig
 				let signature = bitcoin::EcdsaSig::from_slice(&transaction.input[i].witness.to_vec()[0])?.sig;
 				let compact_signature = signature.serialize_compact().to_vec();

@@ -13,6 +13,7 @@ extern crate bitcoincore_rpc;
 pub mod compress;
 pub mod error;
 pub mod trellis;
+pub mod image_compressor;
 #[cfg(feature="gui")]
 pub mod gui;
 
