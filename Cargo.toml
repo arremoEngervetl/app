@@ -28,6 +28,7 @@ rs-leveldb = "0.1.5"
 turbojpeg = { version = "0.5.2", features = ["cmake", "pkg-config", "image"], default-features = false }
 hex = "0.4.1"
 trie-rs = "0.1.1"
+either = "1.8.0"
 
 [features]
 gui = ["dep:iced"]

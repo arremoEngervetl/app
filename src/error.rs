@@ -27,7 +27,8 @@ pub enum Error {
     NoTxOut,
     InvalidOutputCompressionCode,
     UnparsableCompression,
-    CompressingTransactionError
+    CompressingTransactionError,
+    UnParsableHuffmanTable
 }
 
 impl From<secp256k1::Error> for Error {
@@ -157,7 +158,8 @@ impl fmt::Display for Error {
             Error::NoTxOut => f.write_str("No TxOut Found, Either Spent or Coinbase Transaction"),
             Error::InvalidOutputCompressionCode => f.write_str("Invalid Output Compression Code, Bad String Returned"),
             Error::UnparsableCompression => f.write_str("Unparsable Compression, Faild or Corupted Compression"),
-            Error::CompressingTransactionError => f.write_str("Unable To Compress Transaction")
+            Error::CompressingTransactionError => f.write_str("Unable To Compress Transaction"),
+            Error::UnParsableHuffmanTable => f.write_str("Unable To Parse Serilized Huffman Table")
         }
     }
 }

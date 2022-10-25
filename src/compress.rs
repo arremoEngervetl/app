@@ -262,9 +262,11 @@ fn get_witness_script(transa: &Transaction,  rpc: &bitcoincore_rpc::Client, reco
 				assert!(ctx.verify_ecdsa(&message, &sig, &pubkey).is_ok());
 				let bpk = bitcoin::PublicKey::new(public_key);
 				println!("bpk = {}", bpk);
-				// let scpk = bitcoin::util::address::Address::p2pkh(&bpk, Network::Bitcoin).script_pubkey();
+				let scpk1 = bitcoin::util::address::Address::p2pkh(&bpk, Network::Bitcoin).script_pubkey();
 				println!("bpkh = {}", bpk.pubkey_hash());
 				let scpk = Script::new_p2pkh(&bpk.pubkey_hash());
+				println!("scpk1 = {}", scpk1);
+				println!("scpk = {}", scpk);
 				println!("{} == {} = {}", scpk, script_pubkey, scpk == script_pubkey);
 				if scpk == script_pubkey {
 					let mut script_sig_vec: Vec<u8> = Vec::new();

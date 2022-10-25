@@ -14,6 +14,7 @@ pub mod compress;
 pub mod error;
 pub mod trellis;
 pub mod image_compressor;
+pub mod huffman_coding;
 #[cfg(feature="gui")]
 pub mod gui;
 
